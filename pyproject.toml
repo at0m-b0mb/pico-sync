@@ -1,0 +1,66 @@
+[project]
+name = "pico-sync"
+version = "0.2.0"
+description = "CLI and GUI tool to copy files and folders bidirectionally between your PC and a Raspberry Pi Pico over MicroPython serial."
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.8"
+authors = [
+    { name = "Kailash Parshad" },
+]
+keywords = [
+    "raspberry-pi-pico",
+    "micropython",
+    "mpremote",
+    "file-sync",
+    "serial",
+    "embedded",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Software Development :: Embedded Systems",
+    "Topic :: System :: Hardware",
+    "Topic :: Utilities",
+]
+dependencies = [
+    "click>=8.0",
+    "mpremote>=1.0",
+    "customtkinter>=5.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "ruff>=0.1",
+]
+
+[project.scripts]
+pico-sync = "pico_sync.cli:main"
+pico-sync-gui = "pico_sync.gui:launch"
+
+[project.urls]
+Homepage = "https://github.com/YOUR_USERNAME/pico-sync"
+Repository = "https://github.com/YOUR_USERNAME/pico-sync"
+Issues = "https://github.com/YOUR_USERNAME/pico-sync/issues"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.ruff]
+line-length = 100
+target-version = "py38"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I"]

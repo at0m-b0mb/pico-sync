@@ -1,0 +1,5 @@
+# Runtime dependencies for pico-sync
+# Install with: pip install -r requirements.txt
+click>=8.0
+mpremote>=1.0
+customtkinter>=5.2
