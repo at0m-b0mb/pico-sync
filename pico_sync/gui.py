@@ -222,6 +222,11 @@ class PicoSyncApp(ctk.CTk):
             command=self._copy_to_pico,
         ).pack(side="left", padx=2)
         ctk.CTkButton(
+            btn_row1, text="📤 Copy All to Pico", fg_color="#0d47a1",
+            hover_color="#1a237e", font=("Segoe UI", 11),
+            command=self._copy_all_to_pico,
+        ).pack(side="left", padx=2)
+        ctk.CTkButton(
             btn_row1, text="🔄 Refresh", width=90, font=("Segoe UI", 11),
             command=self._refresh_local_files,
         ).pack(side="right", padx=2)
@@ -293,6 +298,11 @@ class PicoSyncApp(ctk.CTk):
             pico_b, text="🗑 Remove", fg_color="#c62828",
             hover_color="#b71c1c", font=("Segoe UI", 11),
             command=self._remove_pico_file,
+        ).pack(side="left", padx=2)
+        ctk.CTkButton(
+            pico_b, text="🗑 Delete All", fg_color="#7b1fa2",
+            hover_color="#6a1b9a", font=("Segoe UI", 11),
+            command=self._delete_all_pico,
         ).pack(side="left", padx=2)
         ctk.CTkButton(
             pico_b, text="📂 MkDir", font=("Segoe UI", 11),
@@ -843,6 +853,58 @@ class PicoSyncApp(ctk.CTk):
             args = ["mpremote", "connect", port, "cp", src, dest]
             self._run_cmd_bg(args, f"copy {name} → Pico", on_done=self._refresh_pico_files)
 
+    def _copy_all_to_pico(self) -> None:
+        """Copy all files and folders in the current local directory to the Pico."""
+        port = self._require_port()
+        if not port:
+            return
+        try:
+            entries = os.listdir(self._local_dir)
+        except OSError:
+            messagebox.showerror("Error", f"Could not read folder: {self._local_dir}")
+            return
+        if not entries:
+            messagebox.showinfo("Empty Folder", "The local folder is empty.")
+            return
+        if not messagebox.askyesno(
+            "Copy All to Pico",
+            f"Copy all files/folders from:\n{self._local_dir}\nto Pico:{self._pico_dir}?\n\n"
+            f"({len(entries)} items)"
+        ):
+            return
+        pico_dir = self._pico_dir
+        port_snap = port
+        entries_snap = list(entries)
+
+        def do_copy_all() -> int:
+            rc = 0
+            for name in sorted(entries_snap):
+                src = os.path.join(self._local_dir, name)
+                if os.path.isdir(src):
+                    dest = ":" + pico_dir
+                    result = subprocess.run(
+                        ["mpremote", "connect", port_snap, "cp", "-r", src.rstrip("/"), dest],
+                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                    )
+                    if result.stdout:
+                        self._output_queue.put(result.stdout)
+                    if result.returncode != 0:
+                        rc = result.returncode
+                else:
+                    dest = ":" + pico_dir.rstrip("/") + "/" + name
+                    result = subprocess.run(
+                        ["mpremote", "connect", port_snap, "cp", src, dest],
+                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                    )
+                    if result.stdout:
+                        self._output_queue.put(result.stdout)
+                    if result.returncode != 0:
+                        rc = result.returncode
+            return rc
+
+        self._output_queue.put(f"$ copy all from {self._local_dir} → Pico:{pico_dir}\n")
+        self._run_callable_bg(do_copy_all, "copy all → Pico", on_done=self._refresh_pico_files)
+
     def _deploy(self) -> None:
         """Deploy selected local file or folder to the Pico."""
         port = self._require_port()
@@ -935,6 +997,37 @@ class PicoSyncApp(ctk.CTk):
             new_dir = self._pico_dir.rstrip("/") + "/" + name
             args = ["mpremote", "connect", port, "mkdir", f":{new_dir}"]
             self._run_cmd_bg(args, f"mkdir {name}", on_done=self._refresh_pico_files)
+
+    def _delete_all_pico(self) -> None:
+        """Recursively delete all files and folders in the current Pico directory."""
+        port = self._require_port()
+        if not port:
+            return
+        if not self._pico_btn_map:
+            messagebox.showinfo("Empty", "No files on Pico to delete.")
+            return
+        entries = list(self._pico_btn_map.keys())
+        if not messagebox.askyesno(
+            "Delete All from Pico",
+            f"PERMANENTLY delete all {len(entries)} items in Pico:{self._pico_dir}?\n\n"
+            "This cannot be undone.",
+        ):
+            return
+        pico_dir = self._pico_dir
+        port_snap = port
+        entries_snap = list(entries)
+
+        def do_delete_all() -> int:
+            rc = 0
+            for name in entries_snap:
+                full_path = pico_dir.rstrip("/") + "/" + name
+                self._output_queue.put(f"$ rm -r :{full_path}\n")
+                res = commands._rm_recursive(port_snap, full_path)
+                if res != 0:
+                    rc = res
+            return rc
+
+        self._run_callable_bg(do_delete_all, "delete all from Pico", on_done=self._refresh_pico_files)
 
     def _open_pico_file(self) -> None:
         """Download a Pico file and open it in the code editor."""
