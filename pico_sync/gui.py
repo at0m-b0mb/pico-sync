@@ -1020,13 +1020,21 @@ class PicoSyncApp(ctk.CTk):
         def do_delete_all() -> int:
             rc = 0
             for name in entries_snap:
-                full_path = pico_dir.rstrip("/") + "/" + name
-                self._output_queue.put(f"$ rm -r :{full_path}\n")
-                res = commands._rm_recursive(port_snap, full_path)
-                if res != 0:
-                    rc = res
+                if pico_dir == "/":
+                    full_path = "/" + name
+                else:
+                    full_path = pico_dir.rstrip("/") + "/" + name
+                result = subprocess.run(
+                    ["mpremote", "connect", port_snap, "rm", "-r", f":{full_path}"],
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                )
+                if result.stdout:
+                    self._output_queue.put(result.stdout)
+                if result.returncode != 0:
+                    rc = result.returncode
             return rc
 
+        self._output_queue.put(f"$ delete all from {pico_dir}\n")
         self._run_callable_bg(do_delete_all, "delete all from Pico", on_done=self._refresh_pico_files)
 
     def _open_pico_file(self) -> None:
