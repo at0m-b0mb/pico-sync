@@ -12,6 +12,7 @@ Layout
 
 from __future__ import annotations
 
+import json
 import os
 import queue
 import shlex
@@ -22,7 +23,8 @@ import threading
 import tkinter as tk
 import tkinter.filedialog as filedialog
 import tkinter.messagebox as messagebox
-from typing import List, Optional
+from pathlib import Path
+from typing import Dict, List, Optional
 
 # Support running this file directly: ``python pico_sync/gui.py``
 if __name__ == "__main__" and __package__ is None:
@@ -124,6 +126,135 @@ PY_BUILTINS = (
     "round setattr slice sorted staticmethod sum super type vars zip "
     "classmethod property __init__ __name__ self cls"
 ).split()
+
+
+# ===================================================================
+# Persistent config (~/.pico_sync/config.json)
+# ===================================================================
+
+CONFIG_DIR = Path.home() / ".pico_sync"
+CONFIG_PATH = CONFIG_DIR / "config.json"
+DEFAULT_CONFIG: Dict = {
+    "geometry": "1480x920",
+    "last_local_dir": str(Path.home()),
+    "recent_files": [],
+    "font_size": MONO_FONT[1],
+    "appearance": "dark",
+}
+MAX_RECENT = 10
+
+
+def load_config() -> Dict:
+    try:
+        with open(CONFIG_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return {**DEFAULT_CONFIG, **data}
+    except (OSError, json.JSONDecodeError):
+        return dict(DEFAULT_CONFIG)
+
+
+def save_config(cfg: Dict) -> None:
+    try:
+        CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+        with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2)
+    except OSError:
+        pass
+
+
+# ===================================================================
+# MicroPython snippets — quick-insert templates
+# ===================================================================
+
+SNIPPETS: Dict[str, str] = {
+    "Blink onboard LED": (
+        "from machine import Pin\n"
+        "import time\n\n"
+        "led = Pin(\"LED\", Pin.OUT)\n"
+        "while True:\n"
+        "    led.toggle()\n"
+        "    time.sleep(0.5)\n"
+    ),
+    "Read ADC (potentiometer)": (
+        "from machine import ADC, Pin\n"
+        "import time\n\n"
+        "adc = ADC(Pin(26))\n"
+        "while True:\n"
+        "    raw = adc.read_u16()\n"
+        "    volts = raw * 3.3 / 65535\n"
+        "    print(f\"{raw:5d}  {volts:.3f} V\")\n"
+        "    time.sleep(0.2)\n"
+    ),
+    "PWM (fade LED)": (
+        "from machine import Pin, PWM\n"
+        "import time\n\n"
+        "pwm = PWM(Pin(15))\n"
+        "pwm.freq(1000)\n"
+        "while True:\n"
+        "    for duty in range(0, 65535, 1024):\n"
+        "        pwm.duty_u16(duty)\n"
+        "        time.sleep(0.01)\n"
+        "    for duty in range(65535, 0, -1024):\n"
+        "        pwm.duty_u16(duty)\n"
+        "        time.sleep(0.01)\n"
+    ),
+    "I2C scan": (
+        "from machine import I2C, Pin\n\n"
+        "i2c = I2C(0, scl=Pin(1), sda=Pin(0), freq=400_000)\n"
+        "devices = i2c.scan()\n"
+        "print(\"Found:\", [hex(a) for a in devices])\n"
+    ),
+    "WiFi connect (Pico W)": (
+        "import network, time\n\n"
+        "SSID = \"your-network\"\n"
+        "PASSWORD = \"your-password\"\n\n"
+        "wlan = network.WLAN(network.STA_IF)\n"
+        "wlan.active(True)\n"
+        "wlan.connect(SSID, PASSWORD)\n"
+        "for _ in range(20):\n"
+        "    if wlan.isconnected():\n"
+        "        break\n"
+        "    time.sleep(0.5)\n"
+        "print(\"Connected:\", wlan.ifconfig())\n"
+    ),
+    "HTTP GET (urequests)": (
+        "import urequests\n\n"
+        "r = urequests.get(\"https://example.com\")\n"
+        "print(r.status_code)\n"
+        "print(r.text[:200])\n"
+        "r.close()\n"
+    ),
+    "Button + interrupt": (
+        "from machine import Pin\n\n"
+        "btn = Pin(14, Pin.IN, Pin.PULL_UP)\n\n"
+        "def on_press(pin):\n"
+        "    print(\"pressed!\")\n\n"
+        "btn.irq(trigger=Pin.IRQ_FALLING, handler=on_press)\n"
+    ),
+    "Timer (every 1s)": (
+        "from machine import Timer\n\n"
+        "def tick(t):\n"
+        "    print(\"tick\")\n\n"
+        "tmr = Timer()\n"
+        "tmr.init(period=1000, mode=Timer.PERIODIC, callback=tick)\n"
+    ),
+    "Read filesystem usage": (
+        "import os\n"
+        "stat = os.statvfs(\"/\")\n"
+        "block_sz, total, free = stat[0], stat[2], stat[3]\n"
+        "used = (total - free) * block_sz\n"
+        "tot = total * block_sz\n"
+        "print(f\"{used} / {tot} bytes used\")\n"
+    ),
+    "main.py boilerplate": (
+        "\"\"\"main.py — runs automatically on boot.\"\"\"\n"
+        "import time\n\n"
+        "def main():\n"
+        "    print(\"hello, pico\")\n\n"
+        "if __name__ == \"__main__\":\n"
+        "    main()\n"
+    ),
+}
 
 
 # ===================================================================
@@ -278,14 +409,20 @@ class PicoSyncApp(ctk.CTk):
     def __init__(self) -> None:
         super().__init__()
         self.title("pico-sync")
-        self.geometry("1480x920")
-        self.minsize(1100, 720)
         self.configure(fg_color=COL_BG)
+
+        # Persistent config
+        self._config: Dict = load_config()
+        self.geometry(self._config.get("geometry", "1480x920"))
+        self.minsize(1100, 720)
 
         # State
         self._port: Optional[str] = None
         self._output_queue: queue.Queue[str] = queue.Queue()
-        self._local_dir: str = os.getcwd()
+        self._local_dir: str = self._config.get(
+            "last_local_dir", os.getcwd()) or os.getcwd()
+        if not os.path.isdir(self._local_dir):
+            self._local_dir = os.getcwd()
         self._local_selected: Optional[str] = None
         self._local_selected_is_dir: bool = False
         self._pico_dir: str = "/"          # current Pico browse directory
@@ -300,8 +437,22 @@ class PicoSyncApp(ctk.CTk):
         self._line_numbers: Optional[LineNumbers] = None
         self._syntax_after_id: Optional[str] = None
 
+        # New feature state
+        self._dirty: bool = False
+        self._recent_files: List[str] = list(
+            self._config.get("recent_files", []))
+        self._font_size: int = int(
+            self._config.get("font_size", MONO_FONT[1]))
+        self._local_filter: str = ""
+        self._pico_filter: str = ""
+        self._local_entries: List[tuple] = []  # cached (name, is_dir, size)
+        self._pico_entries: List[tuple] = []   # cached (name, is_dir)
+        self._find_visible: bool = False
+        self._find_last_index: str = "1.0"
+
         self._build_ui()
         self._bind_shortcuts()
+        self._setup_smart_editor()
         self._poll_output_queue()
         self._refresh_devices()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -322,12 +473,27 @@ class PicoSyncApp(ctk.CTk):
             f"<{mod}-k>": lambda _e: (self._terminal_clear(), "break"),
             f"<{mod}-l>": lambda _e: (self._exec_entry.focus_set(), "break"),
             f"<{mod}-Return>": lambda _e: (self._deploy_and_run(), "break"),
+            f"<{mod}-f>": lambda _e: (self._show_find_bar(), "break"),
+            f"<{mod}-g>": lambda _e: (self._show_goto_line(), "break"),
+            f"<{mod}-plus>": lambda _e: (self._change_font_size(1), "break"),
+            f"<{mod}-equal>": lambda _e: (self._change_font_size(1), "break"),
+            f"<{mod}-minus>": lambda _e: (self._change_font_size(-1), "break"),
+            f"<{mod}-0>": lambda _e: (self._change_font_size(0), "break"),
+            "<Escape>": lambda _e: (self._hide_find_bar(), None),
         }
         for seq, fn in bindings.items():
             self.bind_all(seq, fn)
 
     def _on_close(self) -> None:
-        """Clean up temp files and close the window."""
+        """Persist settings, clean up temp files, and close the window."""
+        try:
+            self._config["geometry"] = self.winfo_geometry()
+            self._config["last_local_dir"] = self._local_dir
+            self._config["recent_files"] = self._recent_files[:MAX_RECENT]
+            self._config["font_size"] = self._font_size
+            save_config(self._config)
+        except Exception:
+            pass
         for tmp in self._tmp_files:
             try:
                 os.unlink(tmp)
@@ -462,12 +628,12 @@ class PicoSyncApp(ctk.CTk):
         self._build_pico_panel(pico_tab)
 
     def _build_local_panel(self, parent) -> None:
-        parent.grid_rowconfigure(1, weight=1)
+        parent.grid_rowconfigure(2, weight=1)
         parent.grid_columnconfigure(0, weight=1)
 
         # Path bar
         path_row = ctk.CTkFrame(parent, fg_color="transparent")
-        path_row.grid(row=0, column=0, sticky="ew", padx=4, pady=(4, 4))
+        path_row.grid(row=0, column=0, sticky="ew", padx=4, pady=(4, 2))
         path_row.grid_columnconfigure(0, weight=1)
         self._local_dir_var = ctk.StringVar(value=self._local_dir)
         ctk.CTkEntry(
@@ -491,19 +657,32 @@ class PicoSyncApp(ctk.CTk):
         browse.grid(row=0, column=2)
         Tooltip(browse, "Browse for folder")
 
+        # Filter row
+        self._local_filter_var = ctk.StringVar()
+        filt = ctk.CTkEntry(
+            parent, textvariable=self._local_filter_var,
+            placeholder_text="🔎  filter files…",
+            font=MONO_FONT_SMALL, height=28,
+            fg_color=COL_BG, border_color=COL_BORDER,
+            text_color=COL_TEXT,
+        )
+        filt.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 2))
+        self._local_filter_var.trace_add(
+            "write", lambda *_: self._on_local_filter_changed())
+
         # File list
         self._local_frame = ctk.CTkScrollableFrame(
             parent, fg_color=COL_BG,
             scrollbar_button_color=COL_SLATE,
             scrollbar_button_hover_color=COL_SLATE_HV,
         )
-        self._local_frame.grid(row=1, column=0, sticky="nsew", padx=4, pady=2)
+        self._local_frame.grid(row=2, column=0, sticky="nsew", padx=4, pady=2)
         self._local_frame.grid_columnconfigure(0, weight=1)
         self._refresh_local_files()
 
         # Buttons — 2-col grid
         btns = ctk.CTkFrame(parent, fg_color="transparent")
-        btns.grid(row=2, column=0, sticky="ew", padx=4, pady=(4, 4))
+        btns.grid(row=3, column=0, sticky="ew", padx=4, pady=(4, 4))
         btns.grid_columnconfigure((0, 1), weight=1, uniform="lbtn")
 
         self._mk_btn(btns, "📝  Open", self._open_local_file,
@@ -532,11 +711,11 @@ class PicoSyncApp(ctk.CTk):
                          row=2, column=1, padx=2, pady=2, sticky="ew")
 
     def _build_pico_panel(self, parent) -> None:
-        parent.grid_rowconfigure(1, weight=1)
+        parent.grid_rowconfigure(2, weight=1)
         parent.grid_columnconfigure(0, weight=1)
 
         path_row = ctk.CTkFrame(parent, fg_color="transparent")
-        path_row.grid(row=0, column=0, sticky="ew", padx=4, pady=(4, 4))
+        path_row.grid(row=0, column=0, sticky="ew", padx=4, pady=(4, 2))
         path_row.grid_columnconfigure(0, weight=1)
         self._pico_dir_var = ctk.StringVar(value="/")
         ctk.CTkEntry(
@@ -553,16 +732,29 @@ class PicoSyncApp(ctk.CTk):
         up.grid(row=0, column=1)
         Tooltip(up, "Go up one folder")
 
+        # Filter row
+        self._pico_filter_var = ctk.StringVar()
+        filt = ctk.CTkEntry(
+            parent, textvariable=self._pico_filter_var,
+            placeholder_text="🔎  filter files…",
+            font=MONO_FONT_SMALL, height=28,
+            fg_color=COL_BG, border_color=COL_BORDER,
+            text_color=COL_TEXT,
+        )
+        filt.grid(row=1, column=0, sticky="ew", padx=4, pady=(0, 2))
+        self._pico_filter_var.trace_add(
+            "write", lambda *_: self._on_pico_filter_changed())
+
         self._pico_frame = ctk.CTkScrollableFrame(
             parent, fg_color=COL_BG,
             scrollbar_button_color=COL_SLATE,
             scrollbar_button_hover_color=COL_SLATE_HV,
         )
-        self._pico_frame.grid(row=1, column=0, sticky="nsew", padx=4, pady=2)
+        self._pico_frame.grid(row=2, column=0, sticky="nsew", padx=4, pady=2)
         self._pico_frame.grid_columnconfigure(0, weight=1)
 
         btns = ctk.CTkFrame(parent, fg_color="transparent")
-        btns.grid(row=2, column=0, sticky="ew", padx=4, pady=(4, 4))
+        btns.grid(row=3, column=0, sticky="ew", padx=4, pady=(4, 4))
         btns.grid_columnconfigure((0, 1), weight=1, uniform="pbtn")
 
         self._mk_btn(btns, "📝  Open", self._open_pico_file,
@@ -598,18 +790,18 @@ class PicoSyncApp(ctk.CTk):
     # -- Editor pane ----------------------------------------------------
 
     def _build_editor_pane(self, parent: ctk.CTkFrame) -> None:
-        parent.grid_rowconfigure(1, weight=1)
+        parent.grid_rowconfigure(2, weight=1)  # row 2 holds the editor body
         parent.grid_columnconfigure(0, weight=1)
 
         # Header row
         hdr = ctk.CTkFrame(parent, fg_color="transparent")
-        hdr.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 6))
+        hdr.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 4))
         hdr.grid_columnconfigure(1, weight=1)
 
         ctk.CTkLabel(
             hdr, text="📝  Editor", font=UI_FONT_BOLD,
             text_color=COL_TEXT,
-        ).grid(row=0, column=0, padx=(0, 12))
+        ).grid(row=0, column=0, padx=(0, 10))
 
         self._editor_file_var = ctk.StringVar(value="(no file)")
         ctk.CTkEntry(
@@ -618,30 +810,112 @@ class PicoSyncApp(ctk.CTk):
             border_color=COL_BORDER, text_color=COL_TEXT_DIM,
         ).grid(row=0, column=1, sticky="ew", padx=4)
 
+        self._recent_btn = self._mk_btn(
+            hdr, "📂  Recent", self._show_recent_menu,
+            COL_SLATE, COL_SLATE_HV,
+            "Reopen a recently used file", width=98)
+        self._recent_btn.grid(row=0, column=2, padx=2)
+
+        self._mk_btn(hdr, "✨  Snippet", self._show_snippets_menu,
+                     COL_SLATE, COL_SLATE_HV,
+                     "Insert a common MicroPython snippet",
+                     width=98).grid(row=0, column=3, padx=2)
+
         self._mk_btn(hdr, "Open", self._open_file,
                      COL_SLATE, COL_SLATE_HV,
-                     "Open file from disk  (⌘O)", width=72).grid(
-                         row=0, column=2, padx=2)
+                     "Open file from disk  (⌘O)", width=64).grid(
+                         row=0, column=4, padx=2)
         self._mk_btn(hdr, "Save", self._save_file,
                      COL_SLATE, COL_SLATE_HV,
-                     "Save to PC  (⌘S)", width=72).grid(
-                         row=0, column=3, padx=2)
+                     "Save to PC  (⌘S)", width=64).grid(
+                         row=0, column=5, padx=2)
         self._mk_btn(hdr, "💾  Save to Pico", self._save_to_pico,
                      COL_BLUE, COL_BLUE_HV,
                      "Save current file to Pico  (⇧⌘S)", width=140).grid(
-                         row=0, column=4, padx=2)
+                         row=0, column=6, padx=2)
+
+        # Find/Replace bar — hidden by default. Grid layout:
+        #   col0: label   col1: entry (stretch)   col2: btn  col3: btn  col4: case/close
+        self._find_frame = ctk.CTkFrame(parent, fg_color=COL_BG_HOVER)
+        self._find_frame.grid_columnconfigure(1, weight=1)
+
+        self._find_var = ctk.StringVar()
+        self._replace_var = ctk.StringVar()
+        self._find_case_var = ctk.BooleanVar(value=False)
+
+        ctk.CTkLabel(
+            self._find_frame, text="Find", font=UI_FONT_SM,
+            text_color=COL_TEXT_DIM, width=54, anchor="e",
+        ).grid(row=0, column=0, padx=(10, 6), pady=(6, 2), sticky="e")
+        self._find_entry = ctk.CTkEntry(
+            self._find_frame, textvariable=self._find_var,
+            font=MONO_FONT_SMALL, height=28,
+            fg_color=COL_BG, border_color=COL_BORDER, text_color=COL_TEXT,
+        )
+        self._find_entry.grid(row=0, column=1, sticky="ew",
+                              padx=2, pady=(6, 2))
+        self._find_entry.bind("<Return>", lambda _e: self._find_next())
+        self._find_entry.bind("<Shift-Return>", lambda _e: self._find_prev())
+
+        self._mk_btn(self._find_frame, "Prev", self._find_prev,
+                     COL_SLATE, COL_SLATE_HV,
+                     "Find previous  (Shift-Enter)", width=64).grid(
+                         row=0, column=2, padx=2, pady=(6, 2))
+        self._mk_btn(self._find_frame, "Next", self._find_next,
+                     COL_BLUE, COL_BLUE_HV,
+                     "Find next  (Enter)", width=64).grid(
+                         row=0, column=3, padx=2, pady=(6, 2))
+
+        case_cb = ctk.CTkCheckBox(
+            self._find_frame, text="Aa", variable=self._find_case_var,
+            font=UI_FONT_SM, text_color=COL_TEXT_DIM,
+            fg_color=COL_BLUE, hover_color=COL_BLUE_HV,
+            border_color=COL_BORDER, checkbox_width=18, checkbox_height=18,
+            width=46,
+        )
+        case_cb.grid(row=0, column=4, padx=(6, 10), pady=(6, 2))
+        Tooltip(case_cb, "Match case")
+
+        ctk.CTkLabel(
+            self._find_frame, text="Replace", font=UI_FONT_SM,
+            text_color=COL_TEXT_DIM, width=54, anchor="e",
+        ).grid(row=1, column=0, padx=(10, 6), pady=(2, 8), sticky="e")
+        self._replace_entry = ctk.CTkEntry(
+            self._find_frame, textvariable=self._replace_var,
+            font=MONO_FONT_SMALL, height=28,
+            fg_color=COL_BG, border_color=COL_BORDER, text_color=COL_TEXT,
+        )
+        self._replace_entry.grid(row=1, column=1, sticky="ew",
+                                 padx=2, pady=(2, 8))
+
+        self._mk_btn(self._find_frame, "Replace", self._replace_one,
+                     COL_SLATE, COL_SLATE_HV,
+                     "Replace current match", width=64).grid(
+                         row=1, column=2, padx=2, pady=(2, 8))
+        self._mk_btn(self._find_frame, "All", self._replace_all,
+                     COL_ORANGE, COL_ORANGE_HV,
+                     "Replace all matches", width=64).grid(
+                         row=1, column=3, padx=2, pady=(2, 8))
+
+        close_btn = ctk.CTkButton(
+            self._find_frame, text="✕", width=28, height=28,
+            font=UI_FONT_BOLD, fg_color=COL_SLATE, hover_color=COL_SLATE_HV,
+            command=self._hide_find_bar,
+        )
+        close_btn.grid(row=1, column=4, padx=(6, 10), pady=(2, 8))
+        Tooltip(close_btn, "Close find/replace  (Esc)")
 
         # Editor body: line numbers + tk.Text + scrollbars
         body = ctk.CTkFrame(
             parent, fg_color=COL_BG, corner_radius=6,
             border_width=1, border_color=COL_BORDER,
         )
-        body.grid(row=1, column=0, sticky="nsew", padx=10, pady=2)
+        body.grid(row=2, column=0, sticky="nsew", padx=10, pady=2)
         body.grid_rowconfigure(0, weight=1)
         body.grid_columnconfigure(1, weight=1)
 
         self._editor = tk.Text(
-            body, font=MONO_FONT, wrap="none", undo=True,
+            body, font=(MONO_FONT[0], self._font_size), wrap="none", undo=True,
             bg=COL_BG, fg=COL_TEXT, insertbackground=COL_TEXT,
             selectbackground=_SELECTED_BG, selectforeground="white",
             bd=0, highlightthickness=0, padx=8, pady=8,
@@ -675,16 +949,9 @@ class PicoSyncApp(ctk.CTk):
         hscroll.configure(command=self._editor.xview)
 
         # Syntax-highlight tags
-        italic = MONO_FONT + ("italic",)
-        self._editor.tag_configure("kw", foreground=SYN_KEYWORD)
-        self._editor.tag_configure("bi", foreground=SYN_BUILTIN)
-        self._editor.tag_configure("str", foreground=SYN_STRING)
-        self._editor.tag_configure("cmt", foreground=SYN_COMMENT, font=italic)
-        self._editor.tag_configure("num", foreground=SYN_NUMBER)
-        self._editor.tag_configure("dec", foreground=SYN_DECORATOR)
-        self._editor.tag_configure("defn", foreground=SYN_DEF_NAME)
+        self._configure_syntax_tags()
 
-        # Live syntax highlighting (debounced)
+        # Live syntax + dirty + gutter
         self._editor.bind("<KeyRelease>", self._schedule_syntax)
         self._editor.bind("<<Modified>>", self._on_editor_modified)
         self._editor.bind(
@@ -699,11 +966,15 @@ class PicoSyncApp(ctk.CTk):
             "<Button-5>",
             lambda _e: self.after(1, self._line_numbers.redraw),
         )
+        # Match-find highlight tag
+        self._editor.tag_configure(
+            "find_match", background="#3a2f0b", foreground=COL_TEXT,
+        )
         self.after(80, self._line_numbers.redraw)
 
         # Action row
         actions = ctk.CTkFrame(parent, fg_color="transparent")
-        actions.grid(row=2, column=0, sticky="ew", padx=10, pady=(8, 10))
+        actions.grid(row=3, column=0, sticky="ew", padx=10, pady=(8, 10))
 
         self._mk_btn(actions, "▶  Run on Pico", self._run_on_pico,
                      COL_GREEN, COL_GREEN_HV,
@@ -715,13 +986,25 @@ class PicoSyncApp(ctk.CTk):
         self._mk_btn(actions, "🚀  Deploy + Run", self._deploy_and_run,
                      COL_BLUE, COL_BLUE_HV,
                      "Copy to Pico and run it  (⌘D)").pack(side="left", padx=3)
-        self._mk_btn(actions, "🔁  Reset Pico", self._reset_pico,
+        reset_btn = self._mk_btn(actions, "🔁  Reset Pico", self._reset_pico,
                      COL_PURPLE, COL_PURPLE_HV,
-                     "Hard-reset the Pico").pack(side="left", padx=3)
+                     "Hard reset.  Shift-click for soft reset.")
+        reset_btn.pack(side="left", padx=3)
+        reset_btn.bind("<Shift-Button-1>", lambda _e: self._soft_reset_pico())
         self._mk_btn(actions, "🔌  Open REPL", self._open_repl,
                      COL_SLATE, COL_SLATE_HV,
                      "Open interactive REPL in a new terminal window").pack(
                          side="left", padx=3)
+
+    def _configure_syntax_tags(self) -> None:
+        italic = (MONO_FONT[0], self._font_size, "italic")
+        self._editor.tag_configure("kw", foreground=SYN_KEYWORD)
+        self._editor.tag_configure("bi", foreground=SYN_BUILTIN)
+        self._editor.tag_configure("str", foreground=SYN_STRING)
+        self._editor.tag_configure("cmt", foreground=SYN_COMMENT, font=italic)
+        self._editor.tag_configure("num", foreground=SYN_NUMBER)
+        self._editor.tag_configure("dec", foreground=SYN_DECORATOR)
+        self._editor.tag_configure("defn", foreground=SYN_DEF_NAME)
 
     # -- Editor helpers (syntax + gutter sync) --------------------------
 
@@ -752,8 +1035,439 @@ class PicoSyncApp(ctk.CTk):
             self._editor.edit_modified(False)
         except tk.TclError:
             return
+        if not self._dirty and self._editor_file:
+            self._dirty = True
+            self._update_editor_title()
         if self._line_numbers:
             self._line_numbers.redraw()
+
+    # -- Editor title (dirty indicator) ---------------------------------
+
+    def _update_editor_title(self) -> None:
+        if not self._editor_file or self._editor_file == "(no file)":
+            self._editor_file_var.set("(no file)")
+            return
+        prefix = "•  " if self._dirty else ""
+        if self._pico_editor_path:
+            label = f"{prefix}[Pico] {self._pico_editor_path}"
+        else:
+            label = f"{prefix}{self._editor_file}"
+        self._editor_file_var.set(label)
+
+    def _mark_editor_clean(self) -> None:
+        """Reset dirty state.  Runs after the next idle tick so any
+        pending <<Modified>> event from a just-completed insert is
+        processed first and then overridden."""
+        def do_clean() -> None:
+            self._dirty = False
+            try:
+                self._editor.edit_modified(False)
+            except (tk.TclError, AttributeError):
+                pass
+            self._update_editor_title()
+        self.after_idle(do_clean)
+
+    # -- Smart-editor key handling (auto-indent, brackets, Tab) ---------
+
+    def _setup_smart_editor(self) -> None:
+        if not hasattr(self, "_editor") or self._editor is None:
+            return
+        self._editor.bind("<Tab>", self._on_tab_key)
+        self._editor.bind("<Shift-Tab>", self._on_shift_tab_key)
+        self._editor.bind("<Return>", self._on_return_key)
+        self._editor.bind("(", lambda _e: self._auto_close("(", ")"))
+        self._editor.bind("[", lambda _e: self._auto_close("[", "]"))
+        self._editor.bind("{", lambda _e: self._auto_close("{", "}"))
+        self._editor.bind('"', lambda _e: self._auto_close('"', '"'))
+        self._editor.bind("'", lambda _e: self._auto_close("'", "'"))
+        self._editor.bind("<BackSpace>", self._on_backspace)
+
+    def _on_tab_key(self, _event) -> str:
+        """Insert 4 spaces instead of a tab character."""
+        try:
+            sel_start = self._editor.index("sel.first")
+            sel_end = self._editor.index("sel.last")
+        except tk.TclError:
+            self._editor.insert("insert", "    ")
+            return "break"
+        # If a selection spans multiple lines, indent each one.
+        first_line = int(sel_start.split(".")[0])
+        last_line = int(sel_end.split(".")[0])
+        if first_line == last_line:
+            self._editor.delete(sel_start, sel_end)
+            self._editor.insert("insert", "    ")
+        else:
+            for ln in range(first_line, last_line + 1):
+                self._editor.insert(f"{ln}.0", "    ")
+        return "break"
+
+    def _on_shift_tab_key(self, _event) -> str:
+        """Outdent selection (or current line) by up to 4 spaces."""
+        try:
+            sel_start = self._editor.index("sel.first")
+            sel_end = self._editor.index("sel.last")
+            first_line = int(sel_start.split(".")[0])
+            last_line = int(sel_end.split(".")[0])
+        except tk.TclError:
+            cur = self._editor.index("insert")
+            first_line = last_line = int(cur.split(".")[0])
+        for ln in range(first_line, last_line + 1):
+            line_start = f"{ln}.0"
+            line_text = self._editor.get(line_start, f"{ln}.end")
+            strip = 0
+            for ch in line_text[:4]:
+                if ch == " ":
+                    strip += 1
+                else:
+                    break
+            if strip:
+                self._editor.delete(line_start, f"{ln}.{strip}")
+        return "break"
+
+    def _on_return_key(self, _event) -> str:
+        """Auto-indent: copy leading whitespace, add +4 if previous line ends in ':'."""
+        cur = self._editor.index("insert")
+        line_no = int(cur.split(".")[0])
+        line_text = self._editor.get(f"{line_no}.0", f"{line_no}.end")
+        # Capture leading whitespace
+        indent = ""
+        for ch in line_text:
+            if ch in (" ", "\t"):
+                indent += ch
+            else:
+                break
+        # Up to cursor column for "ends with :"
+        col = int(cur.split(".")[1])
+        upto_cursor = line_text[:col].rstrip()
+        if upto_cursor.endswith(":"):
+            indent += "    "
+        self._editor.insert("insert", "\n" + indent)
+        return "break"
+
+    def _auto_close(self, opener: str, closer: str) -> str:
+        """Insert *opener**closer* and place the cursor between them."""
+        # Skip pairing if next char already matches closer (typing through it)
+        try:
+            next_ch = self._editor.get("insert", "insert + 1c")
+        except tk.TclError:
+            next_ch = ""
+        if opener == closer and next_ch == closer:
+            # Step over the existing quote
+            self._editor.mark_set("insert", "insert + 1c")
+            return "break"
+        # If there's a selection, wrap it
+        try:
+            sel_start = self._editor.index("sel.first")
+            sel_end = self._editor.index("sel.last")
+            selected = self._editor.get(sel_start, sel_end)
+            self._editor.delete(sel_start, sel_end)
+            self._editor.insert(sel_start, f"{opener}{selected}{closer}")
+            return "break"
+        except tk.TclError:
+            pass
+        self._editor.insert("insert", opener + closer)
+        self._editor.mark_set("insert", "insert - 1c")
+        return "break"
+
+    def _on_backspace(self, _event) -> Optional[str]:
+        """If deleting between an empty bracket pair, remove both."""
+        try:
+            prev_ch = self._editor.get("insert - 1c", "insert")
+            next_ch = self._editor.get("insert", "insert + 1c")
+        except tk.TclError:
+            return None
+        pairs = {"(": ")", "[": "]", "{": "}", '"': '"', "'": "'"}
+        if pairs.get(prev_ch) == next_ch:
+            self._editor.delete("insert - 1c", "insert + 1c")
+            return "break"
+        return None
+
+    # -- Font size --------------------------------------------------------
+
+    def _change_font_size(self, delta: int) -> None:
+        if delta == 0:
+            self._font_size = MONO_FONT[1]
+        else:
+            self._font_size = max(8, min(36, self._font_size + delta))
+        new_font = (MONO_FONT[0], self._font_size)
+        self._editor.configure(font=new_font)
+        self._configure_syntax_tags()
+        if self._line_numbers:
+            self._line_numbers._font = new_font
+            self._line_numbers.redraw()
+        self._set_status(f"Editor font size: {self._font_size}")
+
+    # -- Find / Replace ---------------------------------------------------
+
+    def _show_find_bar(self) -> None:
+        if not self._find_visible:
+            self._find_frame.grid(row=1, column=0, sticky="ew",
+                                  padx=10, pady=(0, 2))
+            self._find_visible = True
+        self._find_entry.focus_set()
+        # Pre-fill with selection if any
+        try:
+            sel = self._editor.get("sel.first", "sel.last")
+            if sel and "\n" not in sel:
+                self._find_var.set(sel)
+                self._find_entry.select_range(0, "end")
+        except tk.TclError:
+            pass
+        self._find_last_index = self._editor.index("insert")
+
+    def _hide_find_bar(self, _event=None) -> None:
+        if self._find_visible:
+            self._find_frame.grid_remove()
+            self._find_visible = False
+            self._editor.tag_remove("find_match", "1.0", "end")
+            self._editor.focus_set()
+
+    def _find_match(self, direction: int = 1) -> Optional[str]:
+        """Search for the next/previous occurrence.  Returns the index or None."""
+        needle = self._find_var.get()
+        if not needle:
+            return None
+        nocase = not self._find_case_var.get()
+        start = self._find_last_index or self._editor.index("insert")
+        if direction > 0:
+            after = self._editor.index(f"{start} + 1c")
+            idx = self._editor.search(needle, after, stopindex="end",
+                                      nocase=nocase)
+            if not idx:  # wrap to beginning
+                idx = self._editor.search(needle, "1.0", stopindex=after,
+                                          nocase=nocase)
+        else:
+            idx = self._editor.search(needle, start, stopindex="1.0",
+                                      nocase=nocase, backwards=True)
+            if not idx:  # wrap to end
+                idx = self._editor.search(needle, "end", stopindex=start,
+                                          nocase=nocase, backwards=True)
+        if not idx:
+            self._set_status(f"No matches for “{needle}”")
+            return None
+        end = self._editor.index(f"{idx} + {len(needle)}c")
+        self._editor.tag_remove("find_match", "1.0", "end")
+        self._editor.tag_add("find_match", idx, end)
+        self._editor.mark_set("insert", end)
+        self._editor.see(idx)
+        self._find_last_index = idx
+        return idx
+
+    def _find_next(self) -> None:
+        self._find_match(1)
+
+    def _find_prev(self) -> None:
+        self._find_match(-1)
+
+    def _replace_one(self) -> None:
+        needle = self._find_var.get()
+        if not needle:
+            return
+        # If there's a current highlighted match, replace it; otherwise find first.
+        ranges = self._editor.tag_ranges("find_match")
+        if ranges:
+            start, end = str(ranges[0]), str(ranges[1])
+            self._editor.delete(start, end)
+            self._editor.insert(start, self._replace_var.get())
+            self._editor.tag_remove("find_match", "1.0", "end")
+            self._find_last_index = self._editor.index(
+                f"{start} + {len(self._replace_var.get())}c"
+            )
+            self._apply_syntax()
+        self._find_next()
+
+    def _replace_all(self) -> None:
+        needle = self._find_var.get()
+        if not needle:
+            return
+        replacement = self._replace_var.get()
+        nocase = not self._find_case_var.get()
+        count = 0
+        idx = "1.0"
+        while True:
+            idx = self._editor.search(needle, idx, stopindex="end",
+                                      nocase=nocase)
+            if not idx:
+                break
+            end = self._editor.index(f"{idx} + {len(needle)}c")
+            self._editor.delete(idx, end)
+            self._editor.insert(idx, replacement)
+            idx = self._editor.index(f"{idx} + {len(replacement)}c")
+            count += 1
+        self._apply_syntax()
+        self._set_status(f"Replaced {count} occurrence(s)")
+
+    # -- Goto line --------------------------------------------------------
+
+    def _show_goto_line(self) -> None:
+        d = ctk.CTkInputDialog(text="Go to line:", title="Goto Line")
+        val = d.get_input()
+        if not val:
+            return
+        try:
+            ln = int(val)
+        except ValueError:
+            return
+        total = int(self._editor.index("end-1c").split(".")[0])
+        ln = max(1, min(total, ln))
+        idx = f"{ln}.0"
+        self._editor.mark_set("insert", idx)
+        self._editor.see(idx)
+        self._editor.focus_set()
+
+    # -- Recent files menu -----------------------------------------------
+
+    def _add_to_recent(self, path: str) -> None:
+        if not path:
+            return
+        path = os.path.abspath(path)
+        if path in self._recent_files:
+            self._recent_files.remove(path)
+        self._recent_files.insert(0, path)
+        self._recent_files = self._recent_files[:MAX_RECENT]
+
+    def _show_recent_menu(self) -> None:
+        menu = tk.Menu(
+            self, tearoff=0, bg=COL_BG_ALT, fg=COL_TEXT,
+            activebackground=COL_BLUE, activeforeground="white",
+            bd=0, font=UI_FONT_SM,
+        )
+        if not self._recent_files:
+            menu.add_command(label="(no recent files)", state="disabled")
+        else:
+            for p in self._recent_files:
+                short = p if len(p) < 80 else "…" + p[-77:]
+                menu.add_command(
+                    label=short,
+                    command=lambda path=p: self._open_recent(path),
+                )
+            menu.add_separator()
+            menu.add_command(
+                label="Clear recent files",
+                command=self._clear_recent,
+            )
+        try:
+            x = self._recent_btn.winfo_rootx()
+            y = self._recent_btn.winfo_rooty() + self._recent_btn.winfo_height()
+            menu.tk_popup(x, y)
+        finally:
+            menu.grab_release()
+
+    def _open_recent(self, path: str) -> None:
+        if not os.path.isfile(path):
+            messagebox.showwarning("File not found", f"{path}\n\nDoes not exist.")
+            self._recent_files = [p for p in self._recent_files if p != path]
+            return
+        try:
+            with open(path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+        except OSError as exc:
+            messagebox.showerror("Open Failed", str(exc))
+            return
+        self._editor_file = path
+        self._pico_editor_path = None
+        self._dirty = False
+        self._update_editor_title()
+        self._editor.configure(state="normal")
+        self._editor.delete("1.0", "end")
+        self._editor.insert("1.0", content)
+        self._apply_syntax()
+        self._mark_editor_clean()
+        self._add_to_recent(path)
+        self._set_status(f"Opened: {os.path.basename(path)}")
+
+    def _clear_recent(self) -> None:
+        self._recent_files = []
+        self._set_status("Recent files cleared")
+
+    # -- Snippets menu ----------------------------------------------------
+
+    def _show_snippets_menu(self) -> None:
+        menu = tk.Menu(
+            self, tearoff=0, bg=COL_BG_ALT, fg=COL_TEXT,
+            activebackground=COL_BLUE, activeforeground="white",
+            bd=0, font=UI_FONT_SM,
+        )
+        for name in SNIPPETS:
+            menu.add_command(
+                label=name,
+                command=lambda n=name: self._insert_snippet(n),
+            )
+        # Anchor under the snippet button — find it by walking the editor
+        # parent for the right widget would be cleaner, but a simple
+        # screen-coords pop-up is fine here.
+        x = self.winfo_pointerx()
+        y = self.winfo_pointery()
+        try:
+            menu.tk_popup(x, y)
+        finally:
+            menu.grab_release()
+
+    def _insert_snippet(self, name: str) -> None:
+        code = SNIPPETS.get(name)
+        if not code:
+            return
+        self._editor.insert("insert", code)
+        self._apply_syntax()
+        self._set_status(f"Inserted snippet: {name}")
+
+    # -- Pico memory + disk info -----------------------------------------
+
+    def _query_pico_info(self) -> None:
+        port = self._port
+        if not port:
+            return
+
+        def worker() -> None:
+            code = (
+                "import gc, os\n"
+                "gc.collect()\n"
+                "f = gc.mem_free()\n"
+                "a = gc.mem_alloc()\n"
+                "try:\n"
+                "    s = os.statvfs('/')\n"
+                "    total = s[0] * s[2]\n"
+                "    free = s[0] * s[3]\n"
+                "except Exception:\n"
+                "    total = 0; free = 0\n"
+                "print('PINFO', f, a, total, free)\n"
+            )
+            try:
+                result = subprocess.run(
+                    ["mpremote", "connect", port, "exec", code],
+                    capture_output=True, text=True, timeout=8,
+                )
+            except (subprocess.TimeoutExpired, FileNotFoundError):
+                return
+            for line in (result.stdout or "").splitlines():
+                if line.startswith("PINFO"):
+                    parts = line.split()
+                    if len(parts) == 5:
+                        try:
+                            free_mem = int(parts[1])
+                            alloc = int(parts[2])
+                            total = int(parts[3])
+                            free_fs = int(parts[4])
+                        except ValueError:
+                            return
+                        used_fs = total - free_fs
+                        info = (
+                            f"RAM: {free_mem // 1024} KB free  •  "
+                            f"Storage: {used_fs // 1024} / {total // 1024} KB"
+                        )
+                        self.after(0, lambda: self._pico_info_var.set(info))
+                        return
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    # -- Soft reset -------------------------------------------------------
+
+    def _soft_reset_pico(self) -> None:
+        port = self._require_port()
+        if not port:
+            return
+        args = ["mpremote", "connect", port, "soft-reset"]
+        self._run_cmd_bg(args, "soft reset")
 
     # -- Terminal pane --------------------------------------------------
 
@@ -832,20 +1546,27 @@ class PicoSyncApp(ctk.CTk):
 
     def _build_status_bar(self) -> None:
         self._status_var = ctk.StringVar(value="Ready")
+        self._pico_info_var = ctk.StringVar(value="")
+        self._port_label_var = ctk.StringVar(value="Not connected")
+
         bar = ctk.CTkFrame(
             self, corner_radius=0, height=30, fg_color=COL_BG_ALT,
         )
         bar.grid(row=2, column=0, sticky="ew")
         bar.grid_propagate(False)
+
         ctk.CTkLabel(
             bar, textvariable=self._status_var, anchor="w",
             font=UI_FONT_SM, text_color=COL_TEXT_DIM,
         ).pack(side="left", padx=16)
-        self._port_label_var = ctk.StringVar(value="Not connected")
         ctk.CTkLabel(
             bar, textvariable=self._port_label_var, anchor="e",
             font=UI_FONT_SM, text_color=COL_TEXT_DIM,
         ).pack(side="right", padx=16)
+        ctk.CTkLabel(
+            bar, textvariable=self._pico_info_var, anchor="e",
+            font=UI_FONT_SM, text_color=COL_BLUE_HV,
+        ).pack(side="right", padx=8)
 
     # ==================================================================
     # Terminal helpers
@@ -1012,6 +1733,7 @@ class PicoSyncApp(ctk.CTk):
         self._dot_label.configure(text_color=_TAG_DOT_ON)
         self._set_status(f"Connected to {port}")
         self._refresh_pico_files()
+        self._query_pico_info()
 
     def _require_port(self) -> Optional[str]:
         port = self._get_port()
@@ -1039,62 +1761,95 @@ class PicoSyncApp(ctk.CTk):
             self._refresh_local_files()
 
     def _refresh_local_files(self) -> None:
+        try:
+            raw = os.listdir(self._local_dir)
+        except OSError:
+            raw = []
+
+        entries: List[tuple] = []  # (name, is_dir, size_str)
+        for n in sorted(raw, key=str.lower):
+            full = os.path.join(self._local_dir, n)
+            is_dir = os.path.isdir(full)
+            if is_dir:
+                entries.append((n, True, ""))
+            else:
+                try:
+                    size = os.path.getsize(full)
+                    if size < 1024:
+                        size_str = f"{size} B"
+                    elif size < 1024 * 1024:
+                        size_str = f"{size / 1024:.1f} KB"
+                    else:
+                        size_str = f"{size / (1024 * 1024):.1f} MB"
+                except OSError:
+                    size_str = "?"
+                entries.append((n, False, size_str))
+
+        # Sort: directories first, then files (each group already alphabetised)
+        entries.sort(key=lambda e: (not e[1], e[0].lower()))
+        self._local_entries = entries
+        self._render_local_list()
+
+    def _on_local_filter_changed(self) -> None:
+        self._local_filter = self._local_filter_var.get().lower().strip()
+        self._render_local_list()
+
+    def _render_local_list(self) -> None:
         for w in self._local_frame.winfo_children():
             w.destroy()
         self._local_btn_map = {}
         self._local_selected = None
         self._local_selected_is_dir = False
 
-        try:
-            raw = os.listdir(self._local_dir)
-        except OSError:
-            raw = []
-
-        dirs = sorted(
-            [n for n in raw if os.path.isdir(os.path.join(self._local_dir, n))],
-            key=str.lower,
-        )
-        files = sorted(
-            [n for n in raw if not os.path.isdir(os.path.join(self._local_dir, n))],
-            key=str.lower,
-        )
-
-        # Folders: single-click selects, double-click navigates in
-        for name in dirs:
-            btn = ctk.CTkButton(
-                self._local_frame, text=f"📁 {name}", anchor="w",
-                fg_color=_NORMAL_BG, hover_color="#21262d", font=MONO_FONT_SMALL,
-                command=lambda n=name: self._select_local(n, is_dir=True),
-            )
+        flt = self._local_filter
+        shown = 0
+        for name, is_dir, size_str in self._local_entries:
+            if flt and flt not in name.lower():
+                continue
+            shown += 1
+            if is_dir:
+                btn = ctk.CTkButton(
+                    self._local_frame, text=f"📁  {name}", anchor="w",
+                    fg_color=_NORMAL_BG, hover_color=COL_BG_HOVER,
+                    text_color=COL_TEXT, font=MONO_FONT_SMALL,
+                    command=lambda n=name: self._select_local(n, is_dir=True),
+                )
+                btn.bind(
+                    "<Double-Button-1>",
+                    lambda _e, n=name: self._enter_local_dir(n),
+                )
+            else:
+                btn = ctk.CTkButton(
+                    self._local_frame,
+                    text=f"📄  {name}    {size_str}",
+                    anchor="w",
+                    fg_color=_NORMAL_BG, hover_color=COL_BG_HOVER,
+                    text_color=COL_TEXT, font=MONO_FONT_SMALL,
+                    command=lambda n=name: self._select_local(n, is_dir=False),
+                )
+                btn.bind(
+                    "<Double-Button-1>",
+                    lambda _e, n=name: self._open_local_file_by_name(n),
+                )
             btn.grid(sticky="ew", padx=2, pady=1)
-            btn.bind(
-                "<Double-Button-1>",
-                lambda _, n=name: self._enter_local_dir(n),
-            )
             self._local_btn_map[name] = btn
 
-        # Files
-        for name in files:
-            full = os.path.join(self._local_dir, name)
-            try:
-                size = os.path.getsize(full)
-                if size < 1024:
-                    size_str = f"{size} B"
-                elif size < 1024 * 1024:
-                    size_str = f"{size / 1024:.1f} KB"
-                else:
-                    size_str = f"{size / (1024 * 1024):.1f} MB"
-            except OSError:
-                size_str = "?"
-            btn = ctk.CTkButton(
+        if shown == 0 and self._local_entries:
+            ctk.CTkLabel(
                 self._local_frame,
-                text=f"📄 {name}  ({size_str})",
-                anchor="w",
-                fg_color=_NORMAL_BG, hover_color="#21262d", font=MONO_FONT_SMALL,
-                command=lambda n=name: self._select_local(n, is_dir=False),
-            )
-            btn.grid(sticky="ew", padx=2, pady=1)
-            self._local_btn_map[name] = btn
+                text=f"(no matches for “{flt}”)",
+                font=MONO_FONT_SMALL, text_color=COL_MUTED,
+            ).grid(sticky="w", padx=8, pady=8)
+        elif not self._local_entries:
+            ctk.CTkLabel(
+                self._local_frame, text="(empty folder)",
+                font=MONO_FONT_SMALL, text_color=COL_MUTED,
+            ).grid(sticky="w", padx=8, pady=8)
+
+    def _open_local_file_by_name(self, name: str) -> None:
+        """Double-click handler — open the file in the editor."""
+        self._select_local(name, is_dir=False)
+        self._open_local_file()
 
     def _enter_local_dir(self, name: str) -> None:
         new_dir = os.path.join(self._local_dir, name)
@@ -1128,7 +1883,7 @@ class PicoSyncApp(ctk.CTk):
 
         ctk.CTkLabel(
             self._pico_frame, text="⏳ Refreshing…",
-            font=("Segoe UI", 11), text_color="#888888",
+            font=MONO_FONT_SMALL, text_color=COL_MUTED,
         ).grid(sticky="w", padx=8, pady=4)
         self._set_status("Listing Pico files…")
         ls_path = ":" + self._pico_dir
@@ -1140,8 +1895,6 @@ class PicoSyncApp(ctk.CTk):
                 capture_output=True, text=True,
             )
             output = result.stdout + result.stderr
-            # Only keep lines whose first token is a number (file size),
-            # filtering out any header lines like "ls /:".
             file_lines = []
             for ln in output.splitlines():
                 ln = ln.strip()
@@ -1151,45 +1904,90 @@ class PicoSyncApp(ctk.CTk):
                 if len(parts) == 2 and parts[0].isdigit():
                     file_lines.append(ln)
 
+            entries: List[tuple] = []  # (name_with_slash, is_dir, size_str)
+            for line in file_lines:
+                parts = line.split(None, 1)
+                size = int(parts[0])
+                name = parts[1]
+                is_dir = name.endswith("/")
+                if is_dir:
+                    size_str = ""
+                elif size < 1024:
+                    size_str = f"{size} B"
+                elif size < 1024 * 1024:
+                    size_str = f"{size / 1024:.1f} KB"
+                else:
+                    size_str = f"{size / (1024 * 1024):.1f} MB"
+                entries.append((name, is_dir, size_str))
+            entries.sort(key=lambda e: (not e[1], e[0].lower()))
+
             def update() -> None:
-                for w in self._pico_frame.winfo_children():
-                    w.destroy()
-                self._pico_btn_map = {}
-                self._pico_is_dir = {}
-
-                if not file_lines:
-                    ctk.CTkLabel(
-                        self._pico_frame, text="(empty)",
-                        font=("Segoe UI", 11), text_color="#666666",
-                    ).grid(sticky="w", padx=8, pady=4)
-
-                for line in file_lines:
-                    parts = line.split(None, 1)
-                    name = parts[1]
-                    is_dir = name.endswith("/")
-                    icon = "📁" if is_dir else "📄"
-                    key = name.rstrip("/")
-                    btn = ctk.CTkButton(
-                        self._pico_frame, text=f"{icon} {name}", anchor="w",
-                        fg_color=_NORMAL_BG, hover_color="#21262d",
-                        font=MONO_FONT_SMALL,
-                        command=lambda k=key: self._select_pico(k),
-                    )
-                    btn.grid(sticky="ew", padx=2, pady=1)
-                    if is_dir:
-                        btn.bind(
-                            "<Double-Button-1>",
-                            lambda _, k=key: self._enter_pico_dir(k),
-                        )
-                    self._pico_btn_map[key] = btn
-                    self._pico_is_dir[key] = is_dir
-
+                self._pico_entries = entries
                 self._set_status(f"Pico files refreshed ({self._pico_dir})")
                 self._output_queue.put(output + "\n")
+                self._render_pico_list()
 
             self.after(0, update)
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def _on_pico_filter_changed(self) -> None:
+        self._pico_filter = self._pico_filter_var.get().lower().strip()
+        self._render_pico_list()
+
+    def _render_pico_list(self) -> None:
+        for w in self._pico_frame.winfo_children():
+            w.destroy()
+        self._pico_btn_map = {}
+        self._pico_is_dir = {}
+
+        flt = self._pico_filter
+        shown = 0
+        for name, is_dir, size_str in self._pico_entries:
+            key = name.rstrip("/")
+            if flt and flt not in key.lower():
+                continue
+            shown += 1
+            icon = "📁" if is_dir else "📄"
+            label = f"{icon}  {name}"
+            if size_str:
+                label += f"    {size_str}"
+            btn = ctk.CTkButton(
+                self._pico_frame, text=label, anchor="w",
+                fg_color=_NORMAL_BG, hover_color=COL_BG_HOVER,
+                text_color=COL_TEXT, font=MONO_FONT_SMALL,
+                command=lambda k=key: self._select_pico(k),
+            )
+            btn.grid(sticky="ew", padx=2, pady=1)
+            if is_dir:
+                btn.bind(
+                    "<Double-Button-1>",
+                    lambda _e, k=key: self._enter_pico_dir(k),
+                )
+            else:
+                btn.bind(
+                    "<Double-Button-1>",
+                    lambda _e, k=key: self._open_pico_file_by_name(k),
+                )
+            self._pico_btn_map[key] = btn
+            self._pico_is_dir[key] = is_dir
+
+        if shown == 0 and self._pico_entries:
+            ctk.CTkLabel(
+                self._pico_frame,
+                text=f"(no matches for “{flt}”)",
+                font=MONO_FONT_SMALL, text_color=COL_MUTED,
+            ).grid(sticky="w", padx=8, pady=8)
+        elif not self._pico_entries:
+            ctk.CTkLabel(
+                self._pico_frame, text="(empty)",
+                font=MONO_FONT_SMALL, text_color=COL_MUTED,
+            ).grid(sticky="w", padx=8, pady=8)
+
+    def _open_pico_file_by_name(self, name: str) -> None:
+        """Double-click handler — open the Pico file in the editor."""
+        self._select_pico(name)
+        self._open_pico_file()
 
     def _select_pico(self, name: str) -> None:
         if self._pico_selected and self._pico_selected in self._pico_btn_map:
@@ -1501,11 +2299,11 @@ class PicoSyncApp(ctk.CTk):
                             content = fh.read()
                         self._editor_file = tmp_path
                         self._pico_editor_path = full_path
-                        self._editor_file_var.set(f"[Pico] {full_path}")
                         self._editor.configure(state="normal")
                         self._editor.delete("1.0", "end")
                         self._editor.insert("1.0", content)
                         self._apply_syntax()
+                        self._mark_editor_clean()
                         self._set_status(f"Opened Pico file: {full_path}")
                     except Exception as exc:
                         messagebox.showerror(
@@ -1602,13 +2400,14 @@ class PicoSyncApp(ctk.CTk):
         if path:
             self._editor_file = path
             self._pico_editor_path = None
-            self._editor_file_var.set(path)
             with open(path, "r", encoding="utf-8", errors="replace") as f:
                 content = f.read()
             self._editor.configure(state="normal")
             self._editor.delete("1.0", "end")
             self._editor.insert("1.0", content)
             self._apply_syntax()
+            self._mark_editor_clean()
+            self._add_to_recent(path)
 
     def _open_local_file(self) -> None:
         """Open the selected local file in the code editor."""
@@ -1631,11 +2430,12 @@ class PicoSyncApp(ctk.CTk):
             return
         self._editor_file = path
         self._pico_editor_path = None
-        self._editor_file_var.set(path)
         self._editor.configure(state="normal")
         self._editor.delete("1.0", "end")
         self._editor.insert("1.0", content)
         self._apply_syntax()
+        self._mark_editor_clean()
+        self._add_to_recent(path)
         self._set_status(f"Opened: {name}")
 
     def _save_to_pico(self) -> None:
@@ -1667,6 +2467,7 @@ class PicoSyncApp(ctk.CTk):
             dest = f":{basename}"
             label = f"save to Pico: {basename}"
         args = ["mpremote", "connect", port, "cp", path, dest]
+        self._mark_editor_clean()
         self._run_cmd_bg(args, label, on_done=self._refresh_pico_files)
 
     def _save_file(self) -> None:
@@ -1691,7 +2492,6 @@ class PicoSyncApp(ctk.CTk):
             path = new_path
             self._editor_file = path
             self._pico_editor_path = None  # now a local file
-            self._editor_file_var.set(path)
         elif not path or path == "(no file)":
             path = filedialog.asksaveasfilename(
                 defaultextension=".py",
@@ -1700,10 +2500,11 @@ class PicoSyncApp(ctk.CTk):
             if not path:
                 return
             self._editor_file = path
-            self._editor_file_var.set(path)
         content = self._editor.get("1.0", "end-1c")
         with open(path, "w", encoding="utf-8") as f:
             f.write(content)
+        self._mark_editor_clean()
+        self._add_to_recent(path)
         self._set_status(f"Saved: {path}")
 
     def _save_editor_silent(self) -> bool:
@@ -1725,6 +2526,8 @@ class PicoSyncApp(ctk.CTk):
         except OSError as exc:
             messagebox.showerror("Save Failed", f"Could not save file:\n{exc}")
             return False
+        if not self._pico_editor_path:
+            self._mark_editor_clean()
         return True
 
     def _run_on_pico(self) -> None:
