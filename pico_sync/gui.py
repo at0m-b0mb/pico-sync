@@ -37,25 +37,231 @@ from .device import list_devices, find_device
 from . import commands
 
 # ---------------------------------------------------------------------------
-# Theme
+# Theme — GitHub-dark inspired palette
 # ---------------------------------------------------------------------------
 
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
-MONO_FONT = ("Consolas", 12) if sys.platform == "win32" else ("Courier New", 12)
-MONO_FONT_SMALL = ("Consolas", 11) if sys.platform == "win32" else ("Courier New", 11)
+# Fonts
+if sys.platform == "win32":
+    MONO_FONT = ("Cascadia Code", 13)
+    MONO_FONT_SMALL = ("Cascadia Code", 11)
+    UI_FONT = ("Segoe UI", 12)
+    UI_FONT_BOLD = ("Segoe UI", 13, "bold")
+    UI_FONT_LG = ("Segoe UI", 15, "bold")
+    UI_FONT_SM = ("Segoe UI", 11)
+elif sys.platform == "darwin":
+    MONO_FONT = ("SF Mono", 13)
+    MONO_FONT_SMALL = ("SF Mono", 11)
+    UI_FONT = ("SF Pro Text", 12)
+    UI_FONT_BOLD = ("SF Pro Text", 13, "bold")
+    UI_FONT_LG = ("SF Pro Display", 15, "bold")
+    UI_FONT_SM = ("SF Pro Text", 11)
+else:
+    MONO_FONT = ("DejaVu Sans Mono", 12)
+    MONO_FONT_SMALL = ("DejaVu Sans Mono", 11)
+    UI_FONT = ("DejaVu Sans", 11)
+    UI_FONT_BOLD = ("DejaVu Sans", 12, "bold")
+    UI_FONT_LG = ("DejaVu Sans", 14, "bold")
+    UI_FONT_SM = ("DejaVu Sans", 10)
 
-_SELECTED_BG = "#1e3a5f"
+# Palette
+COL_BG = "#0d1117"           # app background
+COL_BG_ALT = "#161b22"       # panels / cards
+COL_BG_HOVER = "#21262d"     # hover backgrounds
+COL_BORDER = "#30363d"
+COL_TEXT = "#c9d1d9"
+COL_TEXT_DIM = "#8b949e"
+COL_MUTED = "#6e7681"
+
+# Accent colours (button family)
+COL_BLUE = "#1f6feb"
+COL_BLUE_HV = "#388bfd"
+COL_GREEN = "#238636"
+COL_GREEN_HV = "#2ea043"
+COL_RED = "#da3633"
+COL_RED_HV = "#f85149"
+COL_ORANGE = "#bd5d00"
+COL_ORANGE_HV = "#db6d28"
+COL_PURPLE = "#8957e5"
+COL_PURPLE_HV = "#a371f7"
+COL_SLATE = "#2d333b"
+COL_SLATE_HV = "#3a414b"
+
+# Selection / state
+_SELECTED_BG = "#1f6feb"
 _NORMAL_BG = "transparent"
 
-# Terminal colour tags
-_TAG_CMD = "#58a6ff"       # blue   — command lines ($ …)
-_TAG_ERROR = "#f85149"     # red    — [ERROR]
-_TAG_SUCCESS = "#3fb950"   # green  — [exit 0]
-_TAG_WARN = "#d29922"      # amber  — [exit N>0]
-_TAG_DOT_OFF = "#555555"   # grey   — disconnected dot
-_TAG_DOT_ON = "#43a047"    # green  — connected dot
+# Terminal / syntax tags
+_TAG_CMD = "#79c0ff"
+_TAG_ERROR = "#f85149"
+_TAG_SUCCESS = "#3fb950"
+_TAG_WARN = "#d29922"
+_TAG_DOT_OFF = "#484f58"
+_TAG_DOT_ON = "#3fb950"
+
+# Python syntax colours
+SYN_KEYWORD = "#ff7b72"      # red-pink
+SYN_BUILTIN = "#79c0ff"      # blue
+SYN_STRING = "#a5d6ff"       # light blue
+SYN_COMMENT = "#8b949e"      # grey
+SYN_NUMBER = "#79c0ff"
+SYN_DECORATOR = "#d2a8ff"    # purple
+SYN_DEF_NAME = "#d2a8ff"
+
+PY_KEYWORDS = (
+    "False None True and as assert async await break class continue def del "
+    "elif else except finally for from global if import in is lambda nonlocal "
+    "not or pass raise return try while with yield match case"
+).split()
+
+PY_BUILTINS = (
+    "print len range str int float bool list dict tuple set frozenset bytes "
+    "bytearray abs all any ascii bin chr dir divmod enumerate eval exec "
+    "filter format getattr hasattr hash help hex id input isinstance "
+    "issubclass iter map max min next object oct open ord pow repr reversed "
+    "round setattr slice sorted staticmethod sum super type vars zip "
+    "classmethod property __init__ __name__ self cls"
+).split()
+
+
+# ===================================================================
+# Tooltip helper
+# ===================================================================
+
+class Tooltip:
+    """Lightweight tooltip shown after a short hover delay."""
+
+    def __init__(self, widget, text: str, delay: int = 500) -> None:
+        self.widget = widget
+        self.text = text
+        self.delay = delay
+        self._after_id: Optional[str] = None
+        self._tip: Optional[tk.Toplevel] = None
+        widget.bind("<Enter>", self._schedule, add=True)
+        widget.bind("<Leave>", self._hide, add=True)
+        widget.bind("<ButtonPress>", self._hide, add=True)
+
+    def _schedule(self, _event=None) -> None:
+        self._cancel()
+        self._after_id = self.widget.after(self.delay, self._show)
+
+    def _cancel(self) -> None:
+        if self._after_id:
+            try:
+                self.widget.after_cancel(self._after_id)
+            except Exception:
+                pass
+            self._after_id = None
+
+    def _show(self) -> None:
+        if self._tip or not self.text:
+            return
+        try:
+            x = self.widget.winfo_rootx() + 14
+            y = self.widget.winfo_rooty() + self.widget.winfo_height() + 6
+        except tk.TclError:
+            return
+        tip = tk.Toplevel(self.widget)
+        tip.wm_overrideredirect(True)
+        tip.wm_geometry(f"+{x}+{y}")
+        tip.configure(bg=COL_BORDER)
+        lbl = tk.Label(
+            tip, text=self.text, justify="left",
+            background="#1c2128", foreground=COL_TEXT,
+            relief="flat", borderwidth=0, font=UI_FONT_SM,
+            padx=8, pady=4,
+        )
+        lbl.pack(padx=1, pady=1)
+        self._tip = tip
+
+    def _hide(self, _event=None) -> None:
+        self._cancel()
+        if self._tip:
+            try:
+                self._tip.destroy()
+            except Exception:
+                pass
+            self._tip = None
+
+
+# ===================================================================
+# Line number gutter for the code editor
+# ===================================================================
+
+class LineNumbers(tk.Canvas):
+    """Render line numbers next to a tk.Text widget."""
+
+    def __init__(self, parent, textwidget: tk.Text, **kwargs) -> None:
+        super().__init__(
+            parent, width=44, bg=COL_BG_ALT,
+            highlightthickness=0, bd=0, **kwargs,
+        )
+        self.textwidget = textwidget
+        self._font = MONO_FONT
+
+    def redraw(self, *_args) -> None:
+        self.delete("all")
+        i = self.textwidget.index("@0,0")
+        while True:
+            dline = self.textwidget.dlineinfo(i)
+            if dline is None:
+                break
+            y = dline[1]
+            linenum = str(i).split(".")[0]
+            self.create_text(
+                36, y, anchor="ne", text=linenum,
+                fill=COL_MUTED, font=self._font,
+            )
+            i = self.textwidget.index(f"{i}+1line")
+
+
+# ===================================================================
+# Python syntax highlighter (regex-based)
+# ===================================================================
+
+import re as _re
+
+_RE_COMMENT = _re.compile(r"#[^\n]*")
+_RE_STRING = _re.compile(
+    r"(?P<q>['\"])(?:\\.|(?!(?P=q)).)*(?P=q)"
+)
+_RE_TRIPLE = _re.compile(r"('''.*?'''|\"\"\".*?\"\"\")", _re.DOTALL)
+_RE_KEYWORD = _re.compile(r"\b(" + "|".join(PY_KEYWORDS) + r")\b")
+_RE_BUILTIN = _re.compile(r"\b(" + "|".join(PY_BUILTINS) + r")\b")
+_RE_NUMBER = _re.compile(r"\b(\d+\.?\d*|\.\d+|0x[0-9a-fA-F]+|0b[01]+)\b")
+_RE_DECORATOR = _re.compile(r"^[ \t]*@[\w\.]+", _re.MULTILINE)
+_RE_DEFNAME = _re.compile(r"\b(?:def|class)\s+(\w+)")
+
+
+def apply_python_syntax(text: tk.Text) -> None:
+    """Re-tag the entire contents of *text* with Python syntax highlights."""
+    for tag in ("kw", "bi", "str", "cmt", "num", "dec", "defn"):
+        text.tag_remove(tag, "1.0", "end")
+    source = text.get("1.0", "end-1c")
+
+    def add(pattern, tag, source_text=source):
+        for m in pattern.finditer(source_text):
+            start = f"1.0 + {m.start()} chars"
+            end = f"1.0 + {m.end()} chars"
+            text.tag_add(tag, start, end)
+
+    # Order matters: comments and strings first, then we re-tag inside? No —
+    # we tag everything in order, but the visible tag is whichever was added
+    # last. So: numbers/keywords/builtins first, then strings (which override),
+    # then comments (which override all).
+    add(_RE_NUMBER, "num")
+    add(_RE_BUILTIN, "bi")
+    add(_RE_KEYWORD, "kw")
+    add(_RE_DECORATOR, "dec")
+    for m in _RE_DEFNAME.finditer(source):
+        start = f"1.0 + {m.start(1)} chars"
+        end = f"1.0 + {m.end(1)} chars"
+        text.tag_add("defn", start, end)
+    add(_RE_TRIPLE, "str")
+    add(_RE_STRING, "str")
+    add(_RE_COMMENT, "cmt")
 
 
 # ===================================================================
@@ -72,8 +278,9 @@ class PicoSyncApp(ctk.CTk):
     def __init__(self) -> None:
         super().__init__()
         self.title("pico-sync")
-        self.geometry("1150x820")
-        self.minsize(900, 650)
+        self.geometry("1480x920")
+        self.minsize(1100, 720)
+        self.configure(fg_color=COL_BG)
 
         # State
         self._port: Optional[str] = None
@@ -90,11 +297,34 @@ class PicoSyncApp(ctk.CTk):
         self._running_proc: Optional[subprocess.Popen] = None
         self._tmp_files: List[str] = []  # temp files to clean up on exit
         self._pico_is_dir: dict = {}
+        self._line_numbers: Optional[LineNumbers] = None
+        self._syntax_after_id: Optional[str] = None
 
         self._build_ui()
+        self._bind_shortcuts()
         self._poll_output_queue()
         self._refresh_devices()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    # ------------------------------------------------------------------
+    # Keyboard shortcuts
+    # ------------------------------------------------------------------
+
+    def _bind_shortcuts(self) -> None:
+        mod = "Command" if sys.platform == "darwin" else "Control"
+        bindings = {
+            f"<{mod}-s>": lambda _e: (self._save_file(), "break"),
+            f"<{mod}-S>": lambda _e: (self._save_to_pico(), "break"),
+            f"<{mod}-r>": lambda _e: (self._run_on_pico(), "break"),
+            f"<{mod}-d>": lambda _e: (self._deploy_and_run(), "break"),
+            f"<{mod}-o>": lambda _e: (self._open_file(), "break"),
+            f"<{mod}-e>": lambda _e: (self._exec_editor_code(), "break"),
+            f"<{mod}-k>": lambda _e: (self._terminal_clear(), "break"),
+            f"<{mod}-l>": lambda _e: (self._exec_entry.focus_set(), "break"),
+            f"<{mod}-Return>": lambda _e: (self._deploy_and_run(), "break"),
+        }
+        for seq, fn in bindings.items():
+            self.bind_all(seq, fn)
 
     def _on_close(self) -> None:
         """Clean up temp files and close the window."""
@@ -111,327 +341,511 @@ class PicoSyncApp(ctk.CTk):
 
     def _build_ui(self) -> None:
         self.grid_rowconfigure(1, weight=1)
-        self.grid_rowconfigure(2, weight=2)  # editor pane gets more vertical space
         self.grid_columnconfigure(0, weight=1)
 
         self._build_top_bar()
-        self._build_middle_pane()
-        self._build_editor_pane()
+        self._build_main_pane()
         self._build_status_bar()
+
+    # -- Helper: themed button with tooltip -----------------------------
+
+    def _mk_btn(self, parent, text, cmd, fg, hv, tip=None, **kwargs):
+        btn = ctk.CTkButton(
+            parent, text=text, command=cmd,
+            fg_color=fg, hover_color=hv,
+            font=UI_FONT, **kwargs,
+        )
+        if tip:
+            Tooltip(btn, tip)
+        return btn
 
     # -- Top bar --------------------------------------------------------
 
     def _build_top_bar(self) -> None:
-        bar = ctk.CTkFrame(self, corner_radius=0, height=54)
+        bar = ctk.CTkFrame(
+            self, corner_radius=0, height=60,
+            fg_color=COL_BG_ALT, border_width=0,
+        )
         bar.grid(row=0, column=0, sticky="ew")
+        bar.grid_propagate(False)
         bar.grid_columnconfigure(5, weight=1)
 
         ctk.CTkLabel(
-            bar, text="🔌 pico-sync", font=("Segoe UI", 16, "bold"),
-        ).grid(row=0, column=0, padx=16, pady=10)
+            bar, text="🔌  pico-sync", font=UI_FONT_LG,
+            text_color=COL_TEXT,
+        ).grid(row=0, column=0, padx=(20, 6), pady=14, sticky="w")
 
         self._dot_label = ctk.CTkLabel(
-            bar, text="●", font=("Segoe UI", 18), text_color=_TAG_DOT_OFF,
+            bar, text="●", font=("Helvetica", 16),
+            text_color=_TAG_DOT_OFF,
         )
-        self._dot_label.grid(row=0, column=1, padx=(12, 2))
+        self._dot_label.grid(row=0, column=1, padx=(8, 16))
 
-        ctk.CTkLabel(bar, text="Device:", font=("Segoe UI", 12)).grid(
-            row=0, column=2, padx=(0, 4))
+        ctk.CTkLabel(
+            bar, text="Device", font=UI_FONT, text_color=COL_TEXT_DIM,
+        ).grid(row=0, column=2, padx=(0, 8))
 
         self._device_var = ctk.StringVar(value="(none)")
         self._device_combo = ctk.CTkComboBox(
-            bar, variable=self._device_var, values=["(none)"], width=220,
-            command=self._on_device_selected, font=("Segoe UI", 12),
+            bar, variable=self._device_var, values=["(none)"], width=280,
+            command=self._on_device_selected, font=UI_FONT,
+            fg_color=COL_BG, border_color=COL_BORDER,
+            button_color=COL_SLATE, button_hover_color=COL_SLATE_HV,
+            dropdown_font=UI_FONT, dropdown_fg_color=COL_BG_ALT,
         )
         self._device_combo.grid(row=0, column=3, padx=4)
 
-        ctk.CTkButton(
-            bar, text="🔍 Detect", width=95, font=("Segoe UI", 12),
+        detect = ctk.CTkButton(
+            bar, text="🔍  Detect", width=110, font=UI_FONT,
+            fg_color=COL_SLATE, hover_color=COL_SLATE_HV,
             command=self._refresh_devices,
-        ).grid(row=0, column=4, padx=4)
+        )
+        detect.grid(row=0, column=4, padx=6)
+        Tooltip(detect, "Scan USB ports for MicroPython devices")
 
         self._connect_btn = ctk.CTkButton(
-            bar, text="Connect", width=110, font=("Segoe UI", 12, "bold"),
-            fg_color="#2e7d32", hover_color="#1b5e20",
+            bar, text="Connect", width=140, font=UI_FONT_BOLD,
+            fg_color=COL_GREEN, hover_color=COL_GREEN_HV,
             command=self._toggle_connect,
         )
-        self._connect_btn.grid(row=0, column=5, padx=(4, 16), sticky="e")
+        self._connect_btn.grid(row=0, column=5, padx=(6, 20), sticky="e")
+        Tooltip(self._connect_btn, "Connect to the selected device")
 
-    # -- Middle pane (file browser + terminal) --------------------------
+    # -- Main pane: sidebar | (editor / terminal) -----------------------
 
-    def _build_middle_pane(self) -> None:
-        pane = ctk.CTkFrame(self, corner_radius=6)
-        pane.grid(row=1, column=0, sticky="nsew", padx=8, pady=(4, 2))
-        pane.grid_rowconfigure(0, weight=1)
-        pane.grid_columnconfigure(0, weight=1)
-        pane.grid_columnconfigure(1, weight=2)
+    def _build_main_pane(self) -> None:
+        main = tk.PanedWindow(
+            self, orient="horizontal", sashwidth=5, sashrelief="flat",
+            bg=COL_BG, bd=0, sashpad=0,
+        )
+        main.grid(row=1, column=0, sticky="nsew", padx=10, pady=(8, 6))
 
-        self._build_file_browser(pane)
-        self._build_terminal(pane)
+        sidebar = ctk.CTkFrame(main, corner_radius=8, fg_color=COL_BG_ALT)
+        self._build_sidebar(sidebar)
+        main.add(sidebar, minsize=280, width=340, stretch="never")
 
-    def _build_file_browser(self, parent: ctk.CTkFrame) -> None:
-        fb = ctk.CTkFrame(parent, corner_radius=6)
-        fb.grid(row=0, column=0, sticky="nsew", padx=(6, 3), pady=6)
-        fb.grid_rowconfigure(2, weight=1)
-        fb.grid_rowconfigure(7, weight=1)  # pico scrollable frame row
-        fb.grid_columnconfigure(0, weight=1)
+        right = tk.PanedWindow(
+            main, orient="vertical", sashwidth=5, sashrelief="flat",
+            bg=COL_BG, bd=0, sashpad=0,
+        )
+        main.add(right, minsize=620, stretch="always")
 
-        # --- Local files header ---
-        local_hdr = ctk.CTkFrame(fb, fg_color="transparent")
-        local_hdr.grid(row=0, column=0, sticky="ew", padx=8, pady=(8, 2))
-        local_hdr.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(
-            local_hdr, text="📁 Local Files", font=("Segoe UI", 13, "bold"),
-        ).grid(row=0, column=0, sticky="w")
-        ctk.CTkButton(
-            local_hdr, text="⬆ Up", width=55, height=26,
-            font=("Segoe UI", 11), command=self._navigate_up_local,
-        ).grid(row=0, column=1, padx=(4, 0))
+        editor_pane = ctk.CTkFrame(right, corner_radius=8, fg_color=COL_BG_ALT)
+        self._build_editor_pane(editor_pane)
+        right.add(editor_pane, minsize=240, height=560, stretch="always")
 
-        # Path bar + browse
-        local_top = ctk.CTkFrame(fb, fg_color="transparent")
-        local_top.grid(row=1, column=0, sticky="ew", padx=6)
-        local_top.grid_columnconfigure(0, weight=1)
+        term_pane = ctk.CTkFrame(right, corner_radius=8, fg_color=COL_BG_ALT)
+        self._build_terminal(term_pane)
+        right.add(term_pane, minsize=120, height=240, stretch="always")
+
+    # -- Sidebar (tabbed file browsers) ---------------------------------
+
+    def _build_sidebar(self, parent: ctk.CTkFrame) -> None:
+        parent.grid_rowconfigure(0, weight=1)
+        parent.grid_columnconfigure(0, weight=1)
+
+        tabs = ctk.CTkTabview(
+            parent, fg_color=COL_BG_ALT,
+            segmented_button_fg_color=COL_BG,
+            segmented_button_selected_color=COL_BLUE,
+            segmented_button_selected_hover_color=COL_BLUE_HV,
+            segmented_button_unselected_color=COL_SLATE,
+            segmented_button_unselected_hover_color=COL_SLATE_HV,
+            text_color=COL_TEXT,
+        )
+        tabs.grid(row=0, column=0, sticky="nsew", padx=6, pady=(4, 6))
+
+        local_tab = tabs.add("📁  Local")
+        pico_tab = tabs.add("🤖  Pico")
+
+        self._build_local_panel(local_tab)
+        self._build_pico_panel(pico_tab)
+
+    def _build_local_panel(self, parent) -> None:
+        parent.grid_rowconfigure(1, weight=1)
+        parent.grid_columnconfigure(0, weight=1)
+
+        # Path bar
+        path_row = ctk.CTkFrame(parent, fg_color="transparent")
+        path_row.grid(row=0, column=0, sticky="ew", padx=4, pady=(4, 4))
+        path_row.grid_columnconfigure(0, weight=1)
         self._local_dir_var = ctk.StringVar(value=self._local_dir)
         ctk.CTkEntry(
-            local_top, textvariable=self._local_dir_var,
-            state="readonly", font=("Segoe UI", 11),
+            path_row, textvariable=self._local_dir_var,
+            state="readonly", font=MONO_FONT_SMALL,
+            fg_color=COL_BG, border_color=COL_BORDER,
+            text_color=COL_TEXT_DIM,
         ).grid(row=0, column=0, sticky="ew", padx=(0, 4))
-        ctk.CTkButton(
-            local_top, text="Browse", width=70, font=("Segoe UI", 11),
+        up = ctk.CTkButton(
+            path_row, text="⬆", width=32, font=UI_FONT_BOLD,
+            fg_color=COL_SLATE, hover_color=COL_SLATE_HV,
+            command=self._navigate_up_local,
+        )
+        up.grid(row=0, column=1, padx=(0, 2))
+        Tooltip(up, "Go up one folder")
+        browse = ctk.CTkButton(
+            path_row, text="…", width=32, font=UI_FONT_BOLD,
+            fg_color=COL_SLATE, hover_color=COL_SLATE_HV,
             command=self._browse_local,
-        ).grid(row=0, column=1)
+        )
+        browse.grid(row=0, column=2)
+        Tooltip(browse, "Browse for folder")
 
-        # Scrollable file list
-        local_frame = ctk.CTkScrollableFrame(fb, height=140)
-        local_frame.grid(row=2, column=0, sticky="nsew", padx=6, pady=(2, 0))
-        local_frame.grid_columnconfigure(0, weight=1)
-        self._local_frame = local_frame
+        # File list
+        self._local_frame = ctk.CTkScrollableFrame(
+            parent, fg_color=COL_BG,
+            scrollbar_button_color=COL_SLATE,
+            scrollbar_button_hover_color=COL_SLATE_HV,
+        )
+        self._local_frame.grid(row=1, column=0, sticky="nsew", padx=4, pady=2)
+        self._local_frame.grid_columnconfigure(0, weight=1)
         self._refresh_local_files()
 
-        # Local action buttons — row A
-        btn_row1 = ctk.CTkFrame(fb, fg_color="transparent")
-        btn_row1.grid(row=3, column=0, sticky="ew", padx=6, pady=(4, 1))
-        ctk.CTkButton(
-            btn_row1, text="📝 Open in Editor", font=("Segoe UI", 11),
-            command=self._open_local_file,
-        ).pack(side="left", padx=2)
-        ctk.CTkButton(
-            btn_row1, text="📤 Copy to Pico", fg_color="#1565c0",
-            hover_color="#0d47a1", font=("Segoe UI", 11),
-            command=self._copy_to_pico,
-        ).pack(side="left", padx=2)
-        ctk.CTkButton(
-            btn_row1, text="📤 Copy All to Pico", fg_color="#0d47a1",
-            hover_color="#1a237e", font=("Segoe UI", 11),
-            command=self._copy_all_to_pico,
-        ).pack(side="left", padx=2)
-        ctk.CTkButton(
-            btn_row1, text="🔄 Refresh", width=90, font=("Segoe UI", 11),
-            command=self._refresh_local_files,
-        ).pack(side="right", padx=2)
+        # Buttons — 2-col grid
+        btns = ctk.CTkFrame(parent, fg_color="transparent")
+        btns.grid(row=2, column=0, sticky="ew", padx=4, pady=(4, 4))
+        btns.grid_columnconfigure((0, 1), weight=1, uniform="lbtn")
 
-        # Local action buttons — row B
-        btn_row1b = ctk.CTkFrame(fb, fg_color="transparent")
-        btn_row1b.grid(row=4, column=0, sticky="ew", padx=6, pady=(1, 4))
-        ctk.CTkButton(
-            btn_row1b, text="🚀 Deploy", fg_color="#2e7d32",
-            hover_color="#1b5e20", font=("Segoe UI", 11),
-            command=self._deploy,
-        ).pack(side="left", padx=2)
-        ctk.CTkButton(
-            btn_row1b, text="🔍 Hash", width=70, font=("Segoe UI", 11),
-            command=self._hash_local_file,
-        ).pack(side="left", padx=2)
+        self._mk_btn(btns, "📝  Open", self._open_local_file,
+                     COL_SLATE, COL_SLATE_HV,
+                     "Open selected file in the editor").grid(
+                         row=0, column=0, padx=2, pady=2, sticky="ew")
+        self._mk_btn(btns, "🔍  Hash", self._hash_local_file,
+                     COL_SLATE, COL_SLATE_HV,
+                     "MD5 hash of selected file").grid(
+                         row=0, column=1, padx=2, pady=2, sticky="ew")
+        self._mk_btn(btns, "📤  Push", self._copy_to_pico,
+                     COL_BLUE, COL_BLUE_HV,
+                     "Copy selected file/folder to Pico").grid(
+                         row=1, column=0, padx=2, pady=2, sticky="ew")
+        self._mk_btn(btns, "📤  Push All", self._copy_all_to_pico,
+                     COL_BLUE, COL_BLUE_HV,
+                     "Copy every item in the local folder to Pico").grid(
+                         row=1, column=1, padx=2, pady=2, sticky="ew")
+        self._mk_btn(btns, "🚀  Deploy", self._deploy,
+                     COL_GREEN, COL_GREEN_HV,
+                     "Deploy selected file/folder to Pico").grid(
+                         row=2, column=0, padx=2, pady=2, sticky="ew")
+        self._mk_btn(btns, "🔄  Refresh", self._refresh_local_files,
+                     COL_SLATE, COL_SLATE_HV,
+                     "Reload local file list").grid(
+                         row=2, column=1, padx=2, pady=2, sticky="ew")
 
-        # --- Pico files header ---
-        pico_hdr = ctk.CTkFrame(fb, fg_color="transparent")
-        pico_hdr.grid(row=5, column=0, sticky="ew", padx=8, pady=(8, 2))
-        pico_hdr.grid_columnconfigure(0, weight=1)
-        ctk.CTkLabel(
-            pico_hdr, text="🤖 Pico Files", font=("Segoe UI", 13, "bold"),
-        ).grid(row=0, column=0, sticky="w")
-        ctk.CTkButton(
-            pico_hdr, text="⬆ Up", width=55, height=26,
-            font=("Segoe UI", 11), command=self._navigate_up_pico,
-        ).grid(row=0, column=1, padx=(4, 0))
+    def _build_pico_panel(self, parent) -> None:
+        parent.grid_rowconfigure(1, weight=1)
+        parent.grid_columnconfigure(0, weight=1)
 
-        # Pico path bar
-        pico_top = ctk.CTkFrame(fb, fg_color="transparent")
-        pico_top.grid(row=6, column=0, sticky="ew", padx=6)
-        pico_top.grid_columnconfigure(0, weight=1)
+        path_row = ctk.CTkFrame(parent, fg_color="transparent")
+        path_row.grid(row=0, column=0, sticky="ew", padx=4, pady=(4, 4))
+        path_row.grid_columnconfigure(0, weight=1)
         self._pico_dir_var = ctk.StringVar(value="/")
         ctk.CTkEntry(
-            pico_top, textvariable=self._pico_dir_var,
-            state="readonly", font=("Segoe UI", 11),
-        ).grid(row=0, column=0, sticky="ew")
+            path_row, textvariable=self._pico_dir_var,
+            state="readonly", font=MONO_FONT_SMALL,
+            fg_color=COL_BG, border_color=COL_BORDER,
+            text_color=COL_TEXT_DIM,
+        ).grid(row=0, column=0, sticky="ew", padx=(0, 4))
+        up = ctk.CTkButton(
+            path_row, text="⬆", width=32, font=UI_FONT_BOLD,
+            fg_color=COL_SLATE, hover_color=COL_SLATE_HV,
+            command=self._navigate_up_pico,
+        )
+        up.grid(row=0, column=1)
+        Tooltip(up, "Go up one folder")
 
-        pico_frame = ctk.CTkScrollableFrame(fb, height=140)
-        pico_frame.grid(row=7, column=0, sticky="nsew", padx=6, pady=(2, 0))
-        pico_frame.grid_columnconfigure(0, weight=1)
-        self._pico_frame = pico_frame
+        self._pico_frame = ctk.CTkScrollableFrame(
+            parent, fg_color=COL_BG,
+            scrollbar_button_color=COL_SLATE,
+            scrollbar_button_hover_color=COL_SLATE_HV,
+        )
+        self._pico_frame.grid(row=1, column=0, sticky="nsew", padx=4, pady=2)
+        self._pico_frame.grid_columnconfigure(0, weight=1)
 
-        # Pico action buttons — row A (primary)
-        pico_a = ctk.CTkFrame(fb, fg_color="transparent")
-        pico_a.grid(row=8, column=0, sticky="ew", padx=6, pady=(4, 1))
-        ctk.CTkButton(
-            pico_a, text="📝 Open in Editor", font=("Segoe UI", 11),
-            command=self._open_pico_file,
-        ).pack(side="left", padx=2)
-        ctk.CTkButton(
-            pico_a, text="⬇ Copy to Local", font=("Segoe UI", 11),
-            command=self._copy_from_pico,
-        ).pack(side="left", padx=2)
-        ctk.CTkButton(
-            pico_a, text="🔍 Hash", width=70, font=("Segoe UI", 11),
-            command=self._hash_pico_file,
-        ).pack(side="left", padx=2)
-        ctk.CTkButton(
-            pico_a, text="🔄 Refresh", font=("Segoe UI", 11),
-            command=self._refresh_pico_files,
-        ).pack(side="right", padx=2)
+        btns = ctk.CTkFrame(parent, fg_color="transparent")
+        btns.grid(row=2, column=0, sticky="ew", padx=4, pady=(4, 4))
+        btns.grid_columnconfigure((0, 1), weight=1, uniform="pbtn")
 
-        # Pico action buttons — row B (destructive / mkdir)
-        pico_b = ctk.CTkFrame(fb, fg_color="transparent")
-        pico_b.grid(row=9, column=0, sticky="ew", padx=6, pady=(1, 4))
-        ctk.CTkButton(
-            pico_b, text="🗑 Remove", fg_color="#c62828",
-            hover_color="#b71c1c", font=("Segoe UI", 11),
-            command=self._remove_pico_file,
-        ).pack(side="left", padx=2)
-        ctk.CTkButton(
-            pico_b, text="🗑 Delete All", fg_color="#7b1fa2",
-            hover_color="#6a1b9a", font=("Segoe UI", 11),
-            command=self._delete_all_pico,
-        ).pack(side="left", padx=2)
-        ctk.CTkButton(
-            pico_b, text="📂 MkDir", font=("Segoe UI", 11),
-            command=self._mkdir_pico,
-        ).pack(side="left", padx=2)
+        self._mk_btn(btns, "📝  Open", self._open_pico_file,
+                     COL_SLATE, COL_SLATE_HV,
+                     "Open selected Pico file in editor").grid(
+                         row=0, column=0, padx=2, pady=2, sticky="ew")
+        self._mk_btn(btns, "🔍  Hash", self._hash_pico_file,
+                     COL_SLATE, COL_SLATE_HV,
+                     "MD5 hash of selected Pico file").grid(
+                         row=0, column=1, padx=2, pady=2, sticky="ew")
+        self._mk_btn(btns, "⬇  Pull", self._copy_from_pico,
+                     COL_BLUE, COL_BLUE_HV,
+                     "Copy selected Pico file/folder to local").grid(
+                         row=1, column=0, padx=2, pady=2, sticky="ew")
+        self._mk_btn(btns, "📂  MkDir", self._mkdir_pico,
+                     COL_SLATE, COL_SLATE_HV,
+                     "Create a new directory on Pico").grid(
+                         row=1, column=1, padx=2, pady=2, sticky="ew")
+        self._mk_btn(btns, "🗑  Remove", self._remove_pico_file,
+                     COL_RED, COL_RED_HV,
+                     "Delete selected file/folder from Pico").grid(
+                         row=2, column=0, padx=2, pady=2, sticky="ew")
+        self._mk_btn(btns, "🗑  Delete All", self._delete_all_pico,
+                     COL_PURPLE, COL_PURPLE_HV,
+                     "Delete every item in current Pico folder").grid(
+                         row=2, column=1, padx=2, pady=2, sticky="ew")
+        self._mk_btn(btns, "🔄  Refresh", self._refresh_pico_files,
+                     COL_SLATE, COL_SLATE_HV,
+                     "Reload Pico file list").grid(
+                         row=3, column=0, columnspan=2,
+                         padx=2, pady=2, sticky="ew")
+
+    # -- Editor pane ----------------------------------------------------
+
+    def _build_editor_pane(self, parent: ctk.CTkFrame) -> None:
+        parent.grid_rowconfigure(1, weight=1)
+        parent.grid_columnconfigure(0, weight=1)
+
+        # Header row
+        hdr = ctk.CTkFrame(parent, fg_color="transparent")
+        hdr.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 6))
+        hdr.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(
+            hdr, text="📝  Editor", font=UI_FONT_BOLD,
+            text_color=COL_TEXT,
+        ).grid(row=0, column=0, padx=(0, 12))
+
+        self._editor_file_var = ctk.StringVar(value="(no file)")
+        ctk.CTkEntry(
+            hdr, textvariable=self._editor_file_var, state="readonly",
+            font=MONO_FONT_SMALL, fg_color=COL_BG,
+            border_color=COL_BORDER, text_color=COL_TEXT_DIM,
+        ).grid(row=0, column=1, sticky="ew", padx=4)
+
+        self._mk_btn(hdr, "Open", self._open_file,
+                     COL_SLATE, COL_SLATE_HV,
+                     "Open file from disk  (⌘O)", width=72).grid(
+                         row=0, column=2, padx=2)
+        self._mk_btn(hdr, "Save", self._save_file,
+                     COL_SLATE, COL_SLATE_HV,
+                     "Save to PC  (⌘S)", width=72).grid(
+                         row=0, column=3, padx=2)
+        self._mk_btn(hdr, "💾  Save to Pico", self._save_to_pico,
+                     COL_BLUE, COL_BLUE_HV,
+                     "Save current file to Pico  (⇧⌘S)", width=140).grid(
+                         row=0, column=4, padx=2)
+
+        # Editor body: line numbers + tk.Text + scrollbars
+        body = ctk.CTkFrame(
+            parent, fg_color=COL_BG, corner_radius=6,
+            border_width=1, border_color=COL_BORDER,
+        )
+        body.grid(row=1, column=0, sticky="nsew", padx=10, pady=2)
+        body.grid_rowconfigure(0, weight=1)
+        body.grid_columnconfigure(1, weight=1)
+
+        self._editor = tk.Text(
+            body, font=MONO_FONT, wrap="none", undo=True,
+            bg=COL_BG, fg=COL_TEXT, insertbackground=COL_TEXT,
+            selectbackground=_SELECTED_BG, selectforeground="white",
+            bd=0, highlightthickness=0, padx=8, pady=8,
+            inactiveselectbackground=COL_BORDER,
+        )
+
+        self._line_numbers = LineNumbers(body, self._editor)
+        self._line_numbers.grid(row=0, column=0, sticky="ns", padx=(2, 0), pady=2)
+        self._editor.grid(row=0, column=1, sticky="nsew", pady=2)
+
+        vscroll = ctk.CTkScrollbar(
+            body, orientation="vertical",
+            button_color=COL_SLATE, button_hover_color=COL_SLATE_HV,
+        )
+        vscroll.grid(row=0, column=2, sticky="ns", padx=(0, 2), pady=2)
+        hscroll = ctk.CTkScrollbar(
+            body, orientation="horizontal",
+            button_color=COL_SLATE, button_hover_color=COL_SLATE_HV,
+        )
+        hscroll.grid(row=1, column=1, sticky="ew", padx=2, pady=(0, 2))
+
+        def _on_yview(*args):
+            vscroll.set(*args)
+            if self._line_numbers:
+                self._line_numbers.redraw()
+
+        self._editor.configure(
+            yscrollcommand=_on_yview, xscrollcommand=hscroll.set,
+        )
+        vscroll.configure(command=self._sync_yview)
+        hscroll.configure(command=self._editor.xview)
+
+        # Syntax-highlight tags
+        italic = MONO_FONT + ("italic",)
+        self._editor.tag_configure("kw", foreground=SYN_KEYWORD)
+        self._editor.tag_configure("bi", foreground=SYN_BUILTIN)
+        self._editor.tag_configure("str", foreground=SYN_STRING)
+        self._editor.tag_configure("cmt", foreground=SYN_COMMENT, font=italic)
+        self._editor.tag_configure("num", foreground=SYN_NUMBER)
+        self._editor.tag_configure("dec", foreground=SYN_DECORATOR)
+        self._editor.tag_configure("defn", foreground=SYN_DEF_NAME)
+
+        # Live syntax highlighting (debounced)
+        self._editor.bind("<KeyRelease>", self._schedule_syntax)
+        self._editor.bind("<<Modified>>", self._on_editor_modified)
+        self._editor.bind(
+            "<MouseWheel>",
+            lambda _e: self.after(1, self._line_numbers.redraw),
+        )
+        self._editor.bind(
+            "<Button-4>",
+            lambda _e: self.after(1, self._line_numbers.redraw),
+        )
+        self._editor.bind(
+            "<Button-5>",
+            lambda _e: self.after(1, self._line_numbers.redraw),
+        )
+        self.after(80, self._line_numbers.redraw)
+
+        # Action row
+        actions = ctk.CTkFrame(parent, fg_color="transparent")
+        actions.grid(row=2, column=0, sticky="ew", padx=10, pady=(8, 10))
+
+        self._mk_btn(actions, "▶  Run on Pico", self._run_on_pico,
+                     COL_GREEN, COL_GREEN_HV,
+                     "Run current file on Pico  (⌘R)").pack(side="left", padx=3)
+        self._mk_btn(actions, "⚡  Exec Snippet", self._exec_editor_code,
+                     COL_ORANGE, COL_ORANGE_HV,
+                     "Exec selection (or whole file) on Pico  (⌘E)").pack(
+                         side="left", padx=3)
+        self._mk_btn(actions, "🚀  Deploy + Run", self._deploy_and_run,
+                     COL_BLUE, COL_BLUE_HV,
+                     "Copy to Pico and run it  (⌘D)").pack(side="left", padx=3)
+        self._mk_btn(actions, "🔁  Reset Pico", self._reset_pico,
+                     COL_PURPLE, COL_PURPLE_HV,
+                     "Hard-reset the Pico").pack(side="left", padx=3)
+        self._mk_btn(actions, "🔌  Open REPL", self._open_repl,
+                     COL_SLATE, COL_SLATE_HV,
+                     "Open interactive REPL in a new terminal window").pack(
+                         side="left", padx=3)
+
+    # -- Editor helpers (syntax + gutter sync) --------------------------
+
+    def _sync_yview(self, *args) -> None:
+        self._editor.yview(*args)
+        if self._line_numbers:
+            self.after(1, self._line_numbers.redraw)
+
+    def _schedule_syntax(self, _event=None) -> None:
+        if self._syntax_after_id:
+            try:
+                self.after_cancel(self._syntax_after_id)
+            except Exception:
+                pass
+        self._syntax_after_id = self.after(120, self._apply_syntax)
+
+    def _apply_syntax(self) -> None:
+        self._syntax_after_id = None
+        try:
+            apply_python_syntax(self._editor)
+        except Exception:
+            pass
+        if self._line_numbers:
+            self._line_numbers.redraw()
+
+    def _on_editor_modified(self, _event=None) -> None:
+        try:
+            self._editor.edit_modified(False)
+        except tk.TclError:
+            return
+        if self._line_numbers:
+            self._line_numbers.redraw()
+
+    # -- Terminal pane --------------------------------------------------
 
     def _build_terminal(self, parent: ctk.CTkFrame) -> None:
-        term = ctk.CTkFrame(parent, corner_radius=6)
-        term.grid(row=0, column=1, sticky="nsew", padx=(3, 6), pady=6)
-        term.grid_rowconfigure(1, weight=1)
-        term.grid_columnconfigure(0, weight=1)
+        parent.grid_rowconfigure(1, weight=1)
+        parent.grid_columnconfigure(0, weight=1)
 
-        hdr = ctk.CTkFrame(term, fg_color="transparent")
-        hdr.grid(row=0, column=0, sticky="nw", padx=8, pady=(6, 0))
+        hdr = ctk.CTkFrame(parent, fg_color="transparent")
+        hdr.grid(row=0, column=0, sticky="ew", padx=10, pady=(10, 6))
+
         ctk.CTkLabel(
-            hdr, text="💻 Output Terminal", font=("Segoe UI", 13, "bold"),
+            hdr, text="💻  Terminal", font=UI_FONT_BOLD,
+            text_color=COL_TEXT,
         ).pack(side="left")
-        ctk.CTkButton(
-            hdr, text="Clear", width=60, font=("Segoe UI", 11),
-            command=self._terminal_clear,
-        ).pack(side="left", padx=8)
+
+        self._mk_btn(hdr, "Clear", self._terminal_clear,
+                     COL_SLATE, COL_SLATE_HV,
+                     "Clear terminal  (⌘K)", width=72).pack(
+                         side="left", padx=(14, 2))
+
         self._stop_btn = ctk.CTkButton(
-            hdr, text="⏹ Stop", width=75, font=("Segoe UI", 11),
-            fg_color="#c62828", hover_color="#b71c1c",
+            hdr, text="⏹  Stop", width=82, font=UI_FONT,
+            fg_color=COL_RED, hover_color=COL_RED_HV,
             command=self._stop_running, state="disabled",
         )
         self._stop_btn.pack(side="left", padx=2)
-        ctk.CTkButton(
-            hdr, text="📋 Copy Log", width=90, font=("Segoe UI", 11),
-            command=self._copy_log,
-        ).pack(side="left", padx=2)
-        ctk.CTkButton(
-            hdr, text="💾 Save Log", width=85, font=("Segoe UI", 11),
-            command=self._save_log,
-        ).pack(side="left", padx=2)
+        Tooltip(self._stop_btn, "Stop the running process")
+
+        self._mk_btn(hdr, "📋  Copy", self._copy_log,
+                     COL_SLATE, COL_SLATE_HV,
+                     "Copy terminal log to clipboard", width=82).pack(
+                         side="left", padx=2)
+        self._mk_btn(hdr, "💾  Save", self._save_log,
+                     COL_SLATE, COL_SLATE_HV,
+                     "Save terminal log to file", width=82).pack(
+                         side="left", padx=2)
 
         self._terminal = ctk.CTkTextbox(
-            term, font=MONO_FONT, wrap="word",
-            fg_color="#0d1117", text_color="#c9d1d9",
-            scrollbar_button_color="#30363d",
+            parent, font=MONO_FONT, wrap="word",
+            fg_color=COL_BG, text_color=COL_TEXT,
+            scrollbar_button_color=COL_SLATE,
+            scrollbar_button_hover_color=COL_SLATE_HV,
+            border_color=COL_BORDER, border_width=1, corner_radius=6,
         )
-        self._terminal.grid(row=1, column=0, sticky="nsew", padx=6, pady=(2, 2))
+        self._terminal.grid(row=1, column=0, sticky="nsew", padx=10, pady=2)
 
-        # Syntax-highlight tags
         tw = self._terminal._textbox
         tw.tag_configure("cmd", foreground=_TAG_CMD)
         tw.tag_configure("error", foreground=_TAG_ERROR)
         tw.tag_configure("success", foreground=_TAG_SUCCESS)
         tw.tag_configure("warn", foreground=_TAG_WARN)
 
-        # Exec input
-        inp = ctk.CTkFrame(term, fg_color="transparent")
-        inp.grid(row=2, column=0, sticky="ew", padx=6, pady=(0, 6))
+        # Exec input row
+        inp = ctk.CTkFrame(parent, fg_color="transparent")
+        inp.grid(row=2, column=0, sticky="ew", padx=10, pady=(6, 10))
         inp.grid_columnconfigure(0, weight=1)
+
         self._exec_entry = ctk.CTkEntry(
-            inp, placeholder_text=">>> exec snippet on Pico…",
-            font=MONO_FONT_SMALL,
+            inp, placeholder_text=">>>  run a snippet on Pico…",
+            font=MONO_FONT, height=34,
+            fg_color=COL_BG, border_color=COL_BORDER,
+            text_color=COL_TEXT,
         )
-        self._exec_entry.grid(row=0, column=0, sticky="ew", padx=(0, 4))
-        self._exec_entry.bind("<Return>", lambda _: self._exec_snippet())
-        ctk.CTkButton(
-            inp, text="Send", width=70, font=("Segoe UI", 11),
+        self._exec_entry.grid(row=0, column=0, sticky="ew", padx=(0, 6))
+        self._exec_entry.bind("<Return>", lambda _e: self._exec_snippet())
+
+        send = ctk.CTkButton(
+            inp, text="Send", width=84, height=34, font=UI_FONT_BOLD,
+            fg_color=COL_BLUE, hover_color=COL_BLUE_HV,
             command=self._exec_snippet,
-        ).grid(row=0, column=1)
-
-    # -- Editor pane ----------------------------------------------------
-
-    def _build_editor_pane(self) -> None:
-        ed = ctk.CTkFrame(self, corner_radius=6)
-        ed.grid(row=2, column=0, sticky="nsew", padx=8, pady=(2, 4))
-        ed.grid_rowconfigure(1, weight=1)
-        ed.grid_columnconfigure(0, weight=1)
-
-        top = ctk.CTkFrame(ed, fg_color="transparent")
-        top.grid(row=0, column=0, sticky="ew", padx=8, pady=(6, 2))
-        top.grid_columnconfigure(1, weight=1)
-
-        ctk.CTkLabel(
-            top, text="📝 Code Editor", font=("Segoe UI", 13, "bold"),
-        ).grid(row=0, column=0, padx=(0, 12))
-        self._editor_file_var = ctk.StringVar(value="(no file)")
-        ctk.CTkEntry(
-            top, textvariable=self._editor_file_var, state="readonly",
-        ).grid(row=0, column=1, sticky="ew", padx=4)
-        ctk.CTkButton(top, text="Open", width=60, command=self._open_file).grid(
-            row=0, column=2, padx=2)
-        ctk.CTkButton(top, text="Save to PC", width=85, command=self._save_file).grid(
-            row=0, column=3, padx=2)
-        ctk.CTkButton(
-            top, text="💾 Save to Pico", width=110,
-            fg_color="#1565c0", hover_color="#0d47a1",
-            command=self._save_to_pico,
-        ).grid(row=0, column=4, padx=2)
-
-        self._editor = ctk.CTkTextbox(
-            ed, font=MONO_FONT, wrap="none",
-            fg_color="#0d1117", text_color="#c9d1d9",
         )
-        self._editor.grid(row=1, column=0, sticky="nsew", padx=6, pady=2)
-
-        actions = ctk.CTkFrame(ed, fg_color="transparent")
-        actions.grid(row=2, column=0, sticky="ew", padx=6, pady=(2, 6))
-        for text, fg, hv, cmd in [
-            ("▶ Run on Pico",  "#2e7d32", "#1b5e20", self._run_on_pico),
-            ("⚡ Exec Snippet", "#e65100", "#bf360c", self._exec_editor_code),
-            ("🔁 Reset Pico",  "#6a1b9a", "#4a148c", self._reset_pico),
-            ("🚀 Deploy+Run",  "#1565c0", "#0d47a1", self._deploy_and_run),
-            ("🔌 Open REPL",   "#37474f", "#263238", self._open_repl),
-        ]:
-            ctk.CTkButton(
-                actions, text=text, fg_color=fg, hover_color=hv,
-                command=cmd,
-            ).pack(side="left", padx=4)
+        send.grid(row=0, column=1)
+        Tooltip(send, "Send exec snippet to Pico (Enter)")
 
     # -- Status bar -----------------------------------------------------
 
     def _build_status_bar(self) -> None:
         self._status_var = ctk.StringVar(value="Ready")
-        bar = ctk.CTkFrame(self, corner_radius=0, height=28)
-        bar.grid(row=3, column=0, sticky="ew")
+        bar = ctk.CTkFrame(
+            self, corner_radius=0, height=30, fg_color=COL_BG_ALT,
+        )
+        bar.grid(row=2, column=0, sticky="ew")
+        bar.grid_propagate(False)
         ctk.CTkLabel(
             bar, textvariable=self._status_var, anchor="w",
-            font=("Segoe UI", 11),
-        ).pack(side="left", padx=12)
+            font=UI_FONT_SM, text_color=COL_TEXT_DIM,
+        ).pack(side="left", padx=16)
         self._port_label_var = ctk.StringVar(value="Not connected")
         ctk.CTkLabel(
             bar, textvariable=self._port_label_var, anchor="e",
-            font=("Segoe UI", 11),
-        ).pack(side="right", padx=12)
+            font=UI_FONT_SM, text_color=COL_TEXT_DIM,
+        ).pack(side="right", padx=16)
 
     # ==================================================================
     # Terminal helpers
@@ -1091,6 +1505,7 @@ class PicoSyncApp(ctk.CTk):
                         self._editor.configure(state="normal")
                         self._editor.delete("1.0", "end")
                         self._editor.insert("1.0", content)
+                        self._apply_syntax()
                         self._set_status(f"Opened Pico file: {full_path}")
                     except Exception as exc:
                         messagebox.showerror(
@@ -1193,6 +1608,7 @@ class PicoSyncApp(ctk.CTk):
             self._editor.configure(state="normal")
             self._editor.delete("1.0", "end")
             self._editor.insert("1.0", content)
+            self._apply_syntax()
 
     def _open_local_file(self) -> None:
         """Open the selected local file in the code editor."""
@@ -1219,6 +1635,7 @@ class PicoSyncApp(ctk.CTk):
         self._editor.configure(state="normal")
         self._editor.delete("1.0", "end")
         self._editor.insert("1.0", content)
+        self._apply_syntax()
         self._set_status(f"Opened: {name}")
 
     def _save_to_pico(self) -> None:
